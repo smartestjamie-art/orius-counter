@@ -1,0 +1,513 @@
+<meta charset="utf-8">
+<title>Orius Counter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+  /* Layout: a lab bench tool. Photo viewer on the left, the count and its controls on the right,
+     the batch of photos underneath. Stacks to one column on phones. */
+  :root {
+    --bg: #f2f4f1;
+    --surface: #ffffff;
+    --ink: #17201b;
+    --muted: #5b675f;
+    --line: #d8ded8;
+    --accent: #0e7a4e;
+    --accent-ink: #ffffff;
+    --accent-soft: #e2f1e9;
+    --amber: #a8701a;
+    --danger: #b3261e;
+    --stage: #0d110f;
+    --mark: #22e57f;
+    --font-body: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1411; --surface: #171e1a; --ink: #e5ebe6; --muted: #98a59c; --line: #29332d;
+      --accent: #3fcf8e; --accent-ink: #062014; --accent-soft: #1b2e24; --amber: #e2aa4c; --danger: #f2867e;
+      --stage: #070a08; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1411; --surface: #171e1a; --ink: #e5ebe6; --muted: #98a59c; --line: #29332d;
+    --accent: #3fcf8e; --accent-ink: #062014; --accent-soft: #1b2e24; --amber: #e2aa4c; --danger: #f2867e;
+    --stage: #070a08; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { background: var(--bg); color: var(--ink); font: 15px/1.45 var(--font-body); }
+  .wrap { max-width: 1320px; margin: 0 auto; padding-block: 18px 40px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: flex; flex-direction: column; gap: 16px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+  header h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; text-wrap: balance; }
+  header h1 span { color: var(--muted); font-weight: 500; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+  button, .btn { font: 600 14px/1 var(--font-body); padding: 10px 14px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--surface); color: var(--ink); cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.small { padding: 6px 10px; font-size: 13px; }
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+  @media (max-width: 880px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+
+  .stage { position: relative; background: var(--stage); border-radius: 10px; overflow: hidden; aspect-ratio: 4 / 3;
+    max-width: 100%; touch-action: manipulation; }
+  .stage canvas, .stage video { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .stage video { object-fit: contain; }
+  .stage.drag { outline: 3px dashed var(--accent); outline-offset: -6px; }
+  .stage .empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; color: #c9d3cc;
+    padding: 24px; }
+  .stage .busy { position: absolute; left: 12px; bottom: 12px; padding: 6px 10px; border-radius: 6px;
+    background: rgba(0, 0, 0, .65); color: #fff; font: 13px var(--font-mono); }
+  .stage .tag { position: absolute; left: 12px; top: 12px; padding: 4px 8px; border-radius: 6px; background: var(--amber);
+    color: #fff; font: 600 12px var(--font-body); letter-spacing: .03em; }
+  .hint { color: var(--muted); font-size: 13px; margin: 6px 2px 0; }
+
+  aside { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+  .panel h2 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .count { display: flex; align-items: baseline; gap: 10px; }
+  .count .n { font: 600 64px/1 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--accent); }
+  .count .unit { font-size: 18px; font-weight: 600; }
+  .meta { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; margin-top: 8px; }
+  .slider { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: center; margin: 10px 0; }
+  .slider input { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
+  .slider output { font: 600 14px var(--font-mono); font-variant-numeric: tabular-nums; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .check { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 14px; }
+  .check input { accent-color: var(--accent); }
+  .note { font-size: 13px; color: var(--muted); }
+  .note.warn { color: var(--danger); }
+
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+    font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  tr.sel td { background: var(--accent-soft); }
+  tbody tr { cursor: pointer; }
+  td.num { font: 600 15px var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+  td.name { overflow-wrap: anywhere; }
+  .status { font-size: 13px; color: var(--muted); }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px; font-weight: 600;
+    background: var(--accent-soft); color: var(--accent); }
+  .pill.ex { background: transparent; border: 1px solid var(--amber); color: var(--amber); }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Orius Counter <span>· black Orius in a dish photo</span></h1>
+    <div class="actions">
+      <button id="cameraBtn" hidden>Use camera</button>
+      <button id="addBtn" class="primary">Add photos…</button>
+      <input id="fileInput" type="file" accept="image/*" multiple hidden>
+    </div>
+  </header>
+
+  <div class="grid">
+    <section>
+      <div class="stage" id="stage">
+        <canvas id="view" aria-label="Photo with detected insects circled"></canvas>
+        <video id="video" playsinline muted hidden></video>
+        <canvas id="liveOverlay" hidden></canvas>
+        <div class="empty" id="empty" hidden>Drop dish photos here, or press <b>&nbsp;Add photos…</b></div>
+        <span class="tag" id="exampleTag" hidden>EXAMPLE PHOTO</span>
+        <div class="busy" id="busy" hidden></div>
+      </div>
+      <p class="hint" id="stageHint">Click the photo to zoom in 3×, click again to zoom out. Drop photos anywhere on it to add them.</p>
+    </section>
+
+    <aside>
+      <div class="panel" aria-live="polite">
+        <div class="count"><span class="n" id="countN">–</span><span class="unit">Orius</span></div>
+        <div class="meta" id="countMeta">Counting the example photo…</div>
+      </div>
+
+      <div class="panel" id="cameraPanel" hidden>
+        <h2>Camera</h2>
+        <div class="row">
+          <select id="camSelect" aria-label="Camera"></select>
+        </div>
+        <label class="check"><input type="checkbox" id="liveToggle" checked> Live count on the preview</label>
+        <div class="meta" id="liveMeta"></div>
+        <div class="slider" id="focusRow" hidden>
+          <label for="focus">Manual focus</label><output id="focusOut"></output>
+          <input type="range" id="focus">
+        </div>
+        <div class="row">
+          <button id="captureBtn" class="primary">Capture &amp; count</button>
+          <button id="stopCamBtn">Stop camera</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Thresholds</h2>
+        <div class="slider">
+          <label for="gray">Gray &lt;</label><output id="grayOut">90</output>
+          <input type="range" id="gray" min="40" max="140" step="1" value="90">
+        </div>
+        <div class="slider">
+          <label for="core">Dark core &lt;</label><output id="coreOut">65</output>
+          <input type="range" id="core" min="20" max="110" step="1" value="65">
+        </div>
+        <div class="row">
+          <button class="small" id="presetArducam">Arducam 90 / 65</button>
+          <button class="small" id="presetNotebook">Notebook 75 / 50</button>
+        </div>
+        <p class="note">Changes recount every photo in the list.</p>
+      </div>
+
+      <div class="panel">
+        <h2>Show</h2>
+        <label class="check"><input type="checkbox" id="showMarks" checked> Circles on detected insects</label>
+        <label class="check"><input type="checkbox" id="showDish" checked> Dish outline</label>
+      </div>
+
+      <div class="panel">
+        <h2>Save</h2>
+        <div class="row">
+          <button id="saveImg">Marked photo (JPG)</button>
+          <button id="saveCsv">All counts (CSV)</button>
+        </div>
+        <p class="note" id="saveNote"></p>
+      </div>
+    </aside>
+  </div>
+
+  <div class="panel">
+    <h2>Photos</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Photo</th><th>Size</th><th>Thresholds</th><th style="text-align:right">Orius</th><th></th></tr></thead>
+        <tbody id="list"></tbody>
+      </table>
+    </div>
+    <p class="note">Photos stay in this browser; nothing is uploaded. How it counts: dark blobs in the red channel inside the
+      dish, touching insects split, straw fragments dropped. It is a dark-object detector, not a species classifier, so
+      check the circles on a few photos.</p>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const REF_R = 699;
+  const worker = new Worker('worker.js');
+  const pending = new Map();
+  let seq = 0;
+  worker.onmessage = e => { const p = pending.get(e.data.seq); if (p) { pending.delete(e.data.seq); e.data.error ? p.reject(new Error(e.data.error)) : p.resolve(e.data); } };
+  worker.onerror = e => setBusy('The counter failed to start: ' + (e.message || 'unknown error'));
+  const call = (msg, transfer) => new Promise((resolve, reject) => { msg.seq = ++seq; pending.set(seq, { resolve, reject }); worker.postMessage(msg, transfer || []); });
+
+  const photos = [];
+  let selected = null, zoom = null, nextId = 1;
+  let stream = null, liveBusy = false, liveHistory = [], livePoints = [], liveTimer = null;
+  let thresholds = { gray: 90, core: 65 };
+  try { const t = JSON.parse(localStorage.getItem('oriusThresholds') || 'null'); if (t && t.gray && t.core) thresholds = t; } catch {}
+
+  // ---------- decoding ----------
+  async function decode(blob) {
+    const bmp = await createImageBitmap(blob, { colorSpaceConversion: 'none' });
+    const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(bmp, 0, 0);
+    const rgba = ctx.getImageData(0, 0, bmp.width, bmp.height).data;
+    const rgb = new Uint8Array(bmp.width * bmp.height * 3);
+    for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) { rgb[j] = rgba[i]; rgb[j + 1] = rgba[i + 1]; rgb[j + 2] = rgba[i + 2]; }
+    return { bmp, rgb };
+  }
+
+  // One photo at a time through the worker keeps memory and the progress label simple.
+  let queue = Promise.resolve();
+  const enqueue = fn => (queue = queue.then(fn, fn));
+
+  function addPhoto(blob, name, example) {
+    const ph = { id: nextId++, name, example: !!example, status: 'waiting', count: null, points: [], bmp: null };
+    photos.push(ph);
+    if (!selected || selected.example) select(ph);
+    renderList();
+    enqueue(async () => {
+      try {
+        ph.status = 'reading';  renderList(); setBusy(`Reading ${name}…`);
+        const { bmp, rgb } = await decode(blob);
+        ph.bmp = bmp; ph.origW = bmp.width; ph.origH = bmp.height;
+        if (selected === ph) draw();
+        ph.status = 'finding dish'; renderList(); setBusy(`Finding the dish in ${name}…`);
+        const prep = await call({ type: 'prepare', id: ph.id, rgb: rgb.buffer, width: bmp.width, height: bmp.height }, [rgb.buffer]);
+        Object.assign(ph, { prepW: prep.width, prepH: prep.height, dish: prep.dish });
+        await countPhoto(ph);
+      } catch (err) {
+        ph.status = 'error: ' + err.message; renderList();
+      }
+      setBusy('');
+    });
+  }
+
+  async function countPhoto(ph) {
+    ph.status = 'counting'; renderList(); setBusy(`Counting ${ph.name}…`);
+    const t = { ...thresholds };
+    const r = await call({ type: 'count', id: ph.id, gray: t.gray, core: t.core });
+    Object.assign(ph, { count: r.count, points: r.points, debrisRemoved: r.debrisRemoved, ms: r.ms, gray: t.gray, core: t.core, status: 'done' });
+    renderList();
+    if (selected === ph) { draw(); renderCount(); }
+  }
+
+  function recountAll() {
+    for (const ph of [selected, ...photos.filter(p => p !== selected)]) {
+      if (!ph || !ph.dish) continue;
+      enqueue(async () => { if (ph.gray === thresholds.gray && ph.core === thresholds.core) return; try { await countPhoto(ph); } catch (err) { ph.status = 'error: ' + err.message; renderList(); } setBusy(''); });
+    }
+  }
+
+  // ---------- drawing ----------
+  const view = $('view');
+  function draw() {
+    const ph = selected;
+    const rect = view.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    view.width = Math.round(rect.width * dpr); view.height = Math.round(rect.height * dpr);
+    const ctx = view.getContext('2d');
+    ctx.clearRect(0, 0, view.width, view.height);
+    $('empty').hidden = !!ph;
+    $('exampleTag').hidden = !(ph && ph.example);
+    if (!ph || !ph.bmp) return;
+    let k = Math.min(view.width / ph.origW, view.height / ph.origH);
+    let ox = (view.width - ph.origW * k) / 2, oy = (view.height - ph.origH * k) / 2;
+    if (zoom) { // zoom 3x around the clicked point of the photo
+      k *= 3; ox = view.width / 2 - zoom.x * k; oy = view.height / 2 - zoom.y * k;
+    }
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(ph.bmp, ox, oy, ph.origW * k, ph.origH * k);
+    if (!ph.dish) return;
+    const s = ph.origW / ph.prepW; // prepared (analysed) pixels -> original pixels
+    if ($('showDish').checked) {
+      ctx.setLineDash([8 * dpr, 6 * dpr]); ctx.lineWidth = 1.5 * dpr; ctx.strokeStyle = '#ff5fd2';
+      ctx.beginPath(); ctx.arc(ox + ph.dish[0] * s * k, oy + ph.dish[1] * s * k, ph.dish[2] * s * k, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    if ($('showMarks').checked && ph.points) {
+      const r = Math.max(3.5 * dpr, 9 * (ph.dish[2] / REF_R) * s * k);
+      ctx.lineWidth = Math.max(1.2, 1.4 * dpr);
+      for (const pass of [['rgba(0,0,0,.7)', ctx.lineWidth + 1.5 * dpr], [getComputedStyle(document.documentElement).getPropertyValue('--mark').trim() || '#22e57f', ctx.lineWidth]]) {
+        ctx.strokeStyle = pass[0]; ctx.lineWidth = pass[1];
+        ctx.beginPath();
+        for (const [x, y] of ph.points) { const X = ox + x * s * k, Y = oy + y * s * k; ctx.moveTo(X + r, Y); ctx.arc(X, Y, r, 0, Math.PI * 2); }
+        ctx.stroke();
+      }
+    }
+  }
+
+  view.addEventListener('click', e => {
+    const ph = selected; if (!ph || !ph.bmp) return;
+    if (zoom) { zoom = null; draw(); return; }
+    const rect = view.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    const k = Math.min(view.width / ph.origW, view.height / ph.origH);
+    const ox = (view.width - ph.origW * k) / 2, oy = (view.height - ph.origH * k) / 2;
+    zoom = { x: ((e.clientX - rect.left) * dpr - ox) / k, y: ((e.clientY - rect.top) * dpr - oy) / k };
+    draw();
+  });
+  window.addEventListener('resize', () => { draw(); drawLive(); });
+  $('showMarks').onchange = draw;
+  $('showDish').onchange = draw;
+
+  function setBusy(text) { $('busy').hidden = !text; $('busy').textContent = text; }
+
+  function renderCount() {
+    const ph = selected;
+    if (!ph) { $('countN').textContent = '–'; $('countMeta').textContent = 'Add a photo to count.'; return; }
+    $('countN').textContent = ph.count == null ? '…' : ph.count;
+    if (ph.count == null) { $('countMeta').textContent = `${ph.name}: ${ph.status}`; return; }
+    const parts = [`${ph.example ? 'Example: ' : ''}${ph.name}`, `${ph.origW} × ${ph.origH}`,
+      `gray < ${ph.gray}, dark core < ${ph.core}`];
+    if (ph.debrisRemoved) parts.push(`${ph.debrisRemoved} straw hits dropped`);
+    parts.push(`${(ph.ms / 1000).toFixed(1)} s`);
+    $('countMeta').textContent = parts.join(' · ');
+  }
+
+  function renderList() {
+    const tb = $('list'); tb.textContent = '';
+    for (const ph of photos) {
+      const tr = document.createElement('tr'); if (ph === selected) tr.className = 'sel';
+      const name = document.createElement('td'); name.className = 'name'; name.textContent = ph.name;
+      if (ph.example) { const p = document.createElement('span'); p.className = 'pill ex'; p.textContent = 'example'; name.append(' ', p); }
+      const size = document.createElement('td'); size.className = 'status'; size.textContent = ph.origW ? `${ph.origW} × ${ph.origH}` : '';
+      const thr = document.createElement('td'); thr.className = 'status'; thr.textContent = ph.gray ? `${ph.gray} / ${ph.core}` : '';
+      const n = document.createElement('td'); n.className = 'num';
+      if (ph.status === 'done') n.textContent = ph.count; else { const st = document.createElement('span'); st.className = 'status'; st.textContent = ph.status; n.append(st); }
+      const del = document.createElement('td'); del.style.textAlign = 'right';
+      const b = document.createElement('button'); b.className = 'small'; b.textContent = 'Remove'; b.setAttribute('aria-label', `Remove ${ph.name}`);
+      b.onclick = ev => { ev.stopPropagation(); removePhoto(ph); };
+      del.append(b);
+      tr.append(name, size, thr, n, del);
+      tr.onclick = () => select(ph);
+      tb.append(tr);
+    }
+    if (!photos.length) { const tr = document.createElement('tr'); const td = document.createElement('td'); td.colSpan = 5; td.className = 'status'; td.textContent = 'No photos yet. Add dish photos to count them.'; tr.append(td); tb.append(tr); }
+  }
+
+  function select(ph) { selected = ph; zoom = null; draw(); renderCount(); renderList(); }
+  function removePhoto(ph) {
+    const i = photos.indexOf(ph); if (i < 0) return;
+    photos.splice(i, 1); call({ type: 'drop', id: ph.id }).catch(() => {});
+    if (selected === ph) selected = photos[0] || null;
+    draw(); renderCount(); renderList();
+  }
+
+  // ---------- adding photos ----------
+  $('addBtn').onclick = () => $('fileInput').click();
+  $('fileInput').onchange = () => { for (const f of $('fileInput').files) addPhoto(f, f.name); $('fileInput').value = ''; };
+  const stage = $('stage');
+  ['dragenter', 'dragover'].forEach(t => stage.addEventListener(t, e => { e.preventDefault(); stage.classList.add('drag'); }));
+  ['dragleave', 'drop'].forEach(t => stage.addEventListener(t, e => { e.preventDefault(); stage.classList.remove('drag'); }));
+  stage.addEventListener('drop', e => { for (const f of e.dataTransfer.files) if (f.type.startsWith('image/')) addPhoto(f, f.name); });
+
+  // ---------- thresholds ----------
+  function setThresholds(g, c, recount) {
+    thresholds = { gray: g, core: c };
+    $('gray').value = g; $('core').value = c; $('grayOut').textContent = g; $('coreOut').textContent = c;
+    try { localStorage.setItem('oriusThresholds', JSON.stringify(thresholds)); } catch {}
+    liveHistory = [];
+    if (recount) { clearTimeout(setThresholds.t); setThresholds.t = setTimeout(recountAll, 250); }
+  }
+  $('gray').oninput = () => setThresholds(+$('gray').value, +$('core').value, true);
+  $('core').oninput = () => setThresholds(+$('gray').value, +$('core').value, true);
+  $('presetArducam').onclick = () => setThresholds(90, 65, true);
+  $('presetNotebook').onclick = () => setThresholds(75, 50, true);
+  setThresholds(thresholds.gray, thresholds.core, false);
+
+  // ---------- saving ----------
+  function offer(filename, blob) {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  }
+
+  $('saveImg').onclick = async () => {
+    const ph = selected; if (!ph || ph.count == null) return;
+    // Same picture as the Python overlay: the analysed-size photo, circles of radius 9 at the notebook scale.
+    const c = document.createElement('canvas'); c.width = ph.prepW; c.height = ph.prepH;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(ph.bmp, 0, 0, ph.prepW, ph.prepH);
+    const m = Math.max(4, Math.round(9 * ph.dish[2] / REF_R));
+    ctx.strokeStyle = '#00ff87'; ctx.lineWidth = 1.5; ctx.beginPath();
+    for (const [x, y] of ph.points) { ctx.moveTo(x + m, y); ctx.arc(x, y, m, 0, Math.PI * 2); }
+    ctx.stroke();
+    ctx.strokeStyle = '#ff4fd8'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(ph.dish[0], ph.dish[1], ph.dish[2], 0, Math.PI * 2); ctx.stroke();
+    const size = Math.max(24, Math.round(ph.prepH / 30));
+    ctx.font = `600 ${size}px "Instrument Sans", Arial, sans-serif`;
+    ctx.lineWidth = Math.max(3, size / 8); ctx.strokeStyle = '#000'; ctx.fillStyle = '#00ff87';
+    const label = `${ph.count} Orius   gray < ${ph.gray}, core < ${ph.core}   ${ph.name}`;
+    ctx.strokeText(label, 20, 20 + size); ctx.fillText(label, 20, 20 + size);
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
+    offer(ph.name.replace(/\.[^.]+$/, '') + '_detections.jpg', blob);
+  };
+
+  $('saveCsv').onclick = () => {
+    const done = photos.filter(p => p.status === 'done');
+    if (!done.length) return;
+    const esc = v => /[",\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : v;
+    const rows = [['photo', 'orius', 'gray_threshold', 'core_threshold', 'width', 'height', 'analysed_width', 'dish_x', 'dish_y', 'dish_r', 'straw_hits_dropped', 'example']];
+    for (const p of done) rows.push([p.name, p.count, p.gray, p.core, p.origW, p.origH, p.prepW, p.dish[0], p.dish[1], p.dish[2], p.debrisRemoved, p.example ? 'yes' : '']);
+    offer('orius_counts.csv', new Blob([rows.map(r => r.map(esc).join(',')).join('\n') + '\n'], { type: 'text/csv' }));
+  };
+
+  // ---------- camera (only when the page is opened directly, not embedded in another page) ----------
+  const video = $('video'), live = $('liveOverlay');
+  const framed = window.self !== window.top;
+  if (!framed && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) $('cameraBtn').hidden = false;
+
+  async function startCamera(deviceId) {
+    stopCamera();
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: deviceId ? { exact: deviceId } : undefined, width: { ideal: 4656 }, height: { ideal: 3496 } } });
+    } catch (err) {
+      $('countMeta').textContent = 'Camera unavailable: ' + err.message + '. Add photos instead.';
+      return;
+    }
+    video.srcObject = stream; await video.play();
+    video.hidden = live.hidden = false; view.hidden = true; $('cameraPanel').hidden = false;
+    $('stageHint').textContent = 'Live preview. Green circles show the latest live count.';
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+    const sel = $('camSelect'); sel.textContent = '';
+    for (const d of devs) sel.add(new Option(d.label || 'Camera', d.deviceId));
+    const track = stream.getVideoTracks()[0];
+    sel.value = track.getSettings().deviceId || '';
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    if (caps.focusDistance) { // manual focus where the browser exposes it (not Safari or Chrome on macOS)
+      const f = $('focus'); f.min = caps.focusDistance.min; f.max = caps.focusDistance.max; f.step = caps.focusDistance.step || 0.01;
+      f.value = track.getSettings().focusDistance || caps.focusDistance.min; $('focusOut').textContent = 'auto'; $('focusRow').hidden = false;
+      f.oninput = () => { track.applyConstraints({ advanced: [{ focusMode: 'manual', focusDistance: +f.value }] }).catch(() => {}); $('focusOut').textContent = (+f.value).toFixed(2); };
+    } else $('focusRow').hidden = true;
+    liveHistory = []; livePoints = [];
+    liveTimer = setInterval(liveTick, 400);
+  }
+
+  function stopCamera() {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = null; clearInterval(liveTimer);
+    video.hidden = live.hidden = true; view.hidden = false; $('cameraPanel').hidden = true;
+    $('stageHint').textContent = 'Click the photo to zoom in 3×, click again to zoom out. Drop photos anywhere on it to add them.';
+    draw();
+  }
+
+  function frameRGB(maxWidth) {
+    const W = video.videoWidth, H = video.videoHeight, k = Math.min(1, maxWidth / W);
+    const c = document.createElement('canvas'); c.width = Math.round(W * k); c.height = Math.round(H * k);
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.imageSmoothingQuality = 'high'; ctx.drawImage(video, 0, 0, c.width, c.height);
+    const rgba = ctx.getImageData(0, 0, c.width, c.height).data, rgb = new Uint8Array(c.width * c.height * 3);
+    for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) { rgb[j] = rgba[i]; rgb[j + 1] = rgba[i + 1]; rgb[j + 2] = rgba[i + 2]; }
+    return { rgb, width: c.width, height: c.height, canvas: c };
+  }
+
+  async function liveTick() {
+    if (!stream || liveBusy || !$('liveToggle').checked || !video.videoWidth) return;
+    liveBusy = true;
+    try {
+      const f = frameRGB(1600), t = { ...thresholds };
+      const r = await call({ type: 'live', rgb: f.rgb.buffer, width: f.width, height: f.height, gray: t.gray, core: t.core }, [f.rgb.buffer]);
+      if (t.gray === thresholds.gray && t.core === thresholds.core) {
+        liveHistory = [...liveHistory, r.count].slice(-5);
+        const med = [...liveHistory].sort((a, b) => a - b)[liveHistory.length >> 1];
+        $('liveMeta').textContent = `Live ≈ ${med} (median of ${liveHistory.length}, last ${r.count})`;
+        livePoints = r.points; drawLive();
+      }
+    } catch (err) { $('liveMeta').textContent = 'Live count failed: ' + err.message; }
+    liveBusy = false;
+  }
+
+  function drawLive() {
+    if (live.hidden) return;
+    const rect = live.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    live.width = Math.round(rect.width * dpr); live.height = Math.round(rect.height * dpr);
+    const ctx = live.getContext('2d'); ctx.clearRect(0, 0, live.width, live.height);
+    if (!$('liveToggle').checked || !video.videoWidth) return;
+    const k = Math.min(live.width / video.videoWidth, live.height / video.videoHeight);
+    const w = video.videoWidth * k, h = video.videoHeight * k, ox = (live.width - w) / 2, oy = (live.height - h) / 2;
+    ctx.strokeStyle = '#22e57f'; ctx.lineWidth = 1.5 * dpr; ctx.beginPath();
+    for (const [x, y] of livePoints) { const X = ox + x * w, Y = oy + y * h; ctx.moveTo(X + 5 * dpr, Y); ctx.arc(X, Y, 5 * dpr, 0, Math.PI * 2); }
+    ctx.stroke();
+  }
+
+  $('cameraBtn').onclick = () => startCamera();
+  $('stopCamBtn').onclick = stopCamera;
+  $('camSelect').onchange = () => startCamera($('camSelect').value);
+  $('liveToggle').onchange = () => { liveHistory = []; livePoints = []; drawLive(); $('liveMeta').textContent = ''; };
+  $('captureBtn').onclick = async () => {
+    if (!video.videoWidth) return;
+    const f = frameRGB(Infinity);
+    const blob = await new Promise(r => f.canvas.toBlob(r, 'image/jpeg', 0.95));
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
+    stopCamera();
+    addPhoto(blob, `orius_${stamp}.jpg`);
+  };
+
+  // ---------- start with the example ----------
+  renderList(); renderCount();
+  fetch('sample.jpg').then(r => r.blob()).then(b => addPhoto(b, 'Arducam dish, 28 Oct', true))
+    .catch(() => { $('empty').hidden = false; renderCount(); });
+})();
+</script>
