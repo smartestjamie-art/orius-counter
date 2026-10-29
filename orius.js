@@ -201,32 +201,44 @@
         }
       }
     }
-    let best = -1, bx = 0, by = 0, br = 0;
+    // Each centre's best gradient-vote score over all radii (votes scatter by a pixel or so: 3x3 sum).
+    const vote = new Float64Array(w * h).fill(-1), voteR = new Int32Array(w * h);
     for (let ri = 0; ri < radii.length; ri++) {
       const a = acc[ri], norm = 2 * Math.PI * radii[ri];
       for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
         const i = y * w + x;
-        // votes scatter by a pixel or so: score each centre by its 3x3 neighbourhood
         const v = (a[i] + a[i - 1] + a[i + 1] + a[i - w] + a[i + w] + a[i - w - 1] + a[i - w + 1] + a[i + w - 1] + a[i + w + 1]) / norm;
-        if (v > best) { best = v; bx = x; by = y; br = radii[ri]; }
+        if (v > vote[i]) { vote[i] = v; voteR[i] = radii[ri]; }
       }
     }
-    // Refine near that estimate the way skimage's hough_circle scores a circle: the share of
-    // its Bresenham perimeter pixels that are edges. Gradient voting alone tends to lock onto
-    // the dish's outer shadow, a few percent wider than the rim the Python version finds.
-    let score = -1, rx = bx, ry = by, rr = br;
-    for (let ri = 0; ri < radii.length; ri++) {
-      const r = radii[ri];
-      if (Math.abs(r - br) > 0.12 * br) continue;
-      const per = circlePerimeter(r);
-      for (let cy = by - 12; cy <= by + 12; cy++) for (let cx = bx - 12; cx <= bx + 12; cx++) {
-        let hits = 0;
-        for (let k = 0; k < per.length; k += 2) {
-          const x = cx + per[k + 1], y = cy + per[k];
-          if (x >= 0 && y >= 0 && x < w && y < h && edge[y * w + x]) hits++;
+    // Gradient voting is only a shortlist: the dish's shadow, the light box or a blurred rim can outvote
+    // the rim. Take the 8 strongest separate centres and score each the way skimage's hough_circle
+    // does, as the share of its Bresenham perimeter pixels that are edges; the best of those wins.
+    const peaks = [], taken = new Uint8Array(w * h);
+    for (let k = 0; k < 8; k++) {
+      let bi = -1;
+      for (let i = 0; i < w * h; i++) if (!taken[i] && vote[i] >= 0 && (bi < 0 || vote[i] > vote[bi])) bi = i;
+      if (bi < 0) break;
+      const x0 = bi % w, y0 = (bi - x0) / w;
+      peaks.push([x0, y0, voteR[bi]]);
+      for (let y = Math.max(0, y0 - 15); y <= Math.min(h - 1, y0 + 15); y++)
+        for (let x = Math.max(0, x0 - 15); x <= Math.min(w - 1, x0 + 15); x++) taken[y * w + x] = 1;
+    }
+    let score = -1, rx = 0, ry = 0, rr = 0;
+    for (const [bx, by, br] of peaks) {
+      for (let ri = 0; ri < radii.length; ri++) {
+        const r = radii[ri];
+        if (Math.abs(r - br) > 0.12 * br) continue;
+        const per = circlePerimeter(r);
+        for (let cy = by - 12; cy <= by + 12; cy++) for (let cx = bx - 12; cx <= bx + 12; cx++) {
+          let hits = 0;
+          for (let k = 0; k < per.length; k += 2) {
+            const x = cx + per[k + 1], y = cy + per[k];
+            if (x >= 0 && y >= 0 && x < w && y < h && edge[y * w + x]) hits++;
+          }
+          const v = hits / (per.length / 2);
+          if (v > score) { score = v; rx = cx; ry = cy; rr = r; }
         }
-        const v = hits / (per.length / 2);
-        if (v > score) { score = v; rx = cx; ry = cy; rr = r; }
       }
     }
     return [rx * f, ry * f, rr * f];

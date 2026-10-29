@@ -174,6 +174,7 @@
         </div>
         <label class="check"><input type="checkbox" id="liveToggle" checked> Live count on the preview</label>
         <div class="meta" id="liveMeta"></div>
+        <div class="meta" id="focusMeta"></div>
         <div class="slider" id="focusRow" hidden>
           <label for="focus">Manual focus</label><output id="focusOut"></output>
           <input type="range" id="focus">
@@ -309,7 +310,7 @@ document.documentElement.lang = 'en';
       try {
         ph.status = 'reading';  renderList(); setBusy(`Reading ${name}…`);
         const { bmp, rgb } = await decode(blob);
-        ph.bmp = bmp; ph.origW = bmp.width; ph.origH = bmp.height;
+        ph.bmp = bmp; ph.origW = bmp.width; ph.origH = bmp.height; ph.focus = sharpness(bmp, bmp.width, bmp.height);
         if (selected === ph) draw();
         ph.status = 'finding dish'; renderList(); setBusy(`Finding the dish in ${name}…`);
         const prep = await call({ type: 'prepare', id: ph.id, rgb: rgb.buffer, width: bmp.width, height: bmp.height }, [rgb.buffer]);
@@ -561,6 +562,8 @@ document.documentElement.lang = 'en';
     const parts = [`${ph.example ? 'Example: ' : ''}${ph.name}`, `${ph.origW} × ${ph.origH}`,
       `gray < ${ph.gray}, dark core < ${ph.core}`];
     if (ph.backlit) parts.push('backlit: dish wall ignored');
+    const blur = focusWarning(ph.focus);
+    if (blur) parts.push(blur);
     if (ph.debrisRemoved) parts.push(`${ph.debrisRemoved} straw hits dropped`);
     if (ph.count !== ph.autoCount || ph.fix.removed.length) parts.push(`corrected by hand from ${ph.autoCount}`);
     parts.push(`${(ph.ms / 1000).toFixed(1)} s`);
@@ -796,14 +799,67 @@ document.documentElement.lang = 'en';
   $('stopCamBtn').onclick = stopCamera;
   $('camSelect').onchange = () => startCamera($('camSelect').value);
   $('liveToggle').onchange = () => { liveHistory = []; livePoints = []; drawLive(); $('liveMeta').textContent = ''; };
+  // Capture: watch the full-resolution frames for 3 s and keep the one whose weakest band is sharpest.
+  let capturing = false;
   $('captureBtn').onclick = async () => {
-    if (!video.videoWidth) return;
-    const f = frameRGB(Infinity);
-    const blob = await new Promise(r => f.canvas.toBlob(r, 'image/jpeg', 0.95));
+    if (!video.videoWidth || capturing) return;
+    capturing = true; $('captureBtn').disabled = true;
+    const W = video.videoWidth, H = video.videoHeight, t0 = performance.now();
+    let best = null, bestScore = -1, frames = 0;
+    while (performance.now() - t0 < 3000 && stream) {
+      const c = document.createElement('canvas'); c.width = W; c.height = H;
+      c.getContext('2d').drawImage(video, 0, 0);
+      const score = Math.min(...sharpness(c, W, H));
+      frames++;
+      if (score > bestScore) { best = c; bestScore = score; }
+      $('captureBtn').textContent = `Picking the sharpest frame… ${frames}`;
+      await new Promise(r => setTimeout(r, 120));
+    }
+    $('captureBtn').textContent = 'Capture & count'; $('captureBtn').disabled = false; capturing = false;
+    if (!best) return;
+    const blob = await new Promise(r => best.toBlob(r, 'image/jpeg', 0.95));
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
     stopCamera();
     addPhoto(blob, `orius_${stamp}.jpg`);
   };
+
+  // ---------- focus: the camera's autofocus lands differently on every shot ----------
+  // Mean |Laplacian| of the luma in three bands across the middle of the frame: left, centre, right.
+  function sharpness(src, W, H) {
+    const k = Math.min(1, 1600 / W), w = Math.round(W * k), h = Math.round(H * k);
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(src, 0, 0, w, h);
+    const y0 = Math.round(h * 0.3), rows = Math.round(h * 0.7) - y0, d = ctx.getImageData(0, y0, w, rows).data;
+    const g = new Float32Array(w * rows);
+    for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2];
+    return [[0.2, 0.4], [0.4, 0.6], [0.6, 0.8]].map(([a, b]) => {
+      let sum = 0, n = 0;
+      for (let y = 1; y < rows - 1; y++) for (let x = Math.round(a * w); x < Math.round(b * w); x++) {
+        const i = y * w + x;
+        sum += Math.abs(4 * g[i] - g[i - 1] - g[i + 1] - g[i - w] - g[i + w]); n++;
+      }
+      return sum / n;
+    });
+  }
+
+  // A side less than half as sharp as the sharpest band is out of focus.
+  function focusWarning(f) {
+    if (!f) return '';
+    const max = Math.max(...f), names = ['left side', 'centre', 'right side'];
+    const soft = names.filter((_, i) => f[i] < 0.5 * max);
+    return soft.length ? `⚠ ${soft.join(' and ')} out of focus` : '';
+  }
+
+  // Live focus meter, so the dish and camera can be levelled before capturing.
+  setInterval(() => {
+    if (!stream || !video.videoWidth) { $('focusMeta').textContent = ''; return; }
+    const f = sharpness(video, video.videoWidth, video.videoHeight);
+    const warn = focusWarning(f);
+    $('focusMeta').textContent = `Focus: left ${f[0].toFixed(1)} · centre ${f[1].toFixed(1)} · right ${f[2].toFixed(1)}` +
+      (warn ? ` — ${warn}. Level the dish and camera, or wait for autofocus.` : ' — even');
+    $('focusMeta').style.color = warn ? 'var(--danger)' : '';
+  }, 700);
 
   // ---------- start with the example ----------
   renderList(); renderCount(); renderFix();
