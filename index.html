@@ -52,9 +52,15 @@
   button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
   button:disabled { opacity: .5; cursor: default; }
   button.small { padding: 6px 10px; font-size: 13px; }
-  .grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; grid-template-rows: auto 1fr;
+    grid-template-areas: "photo side" "list side"; gap: 16px; align-items: start; }
+  .photo-area { grid-area: photo; min-width: 0; }
+  .grid > aside { grid-area: side; }
+  .photos-panel { grid-area: list; }
   @media (max-width: 1000px) { .grid { grid-template-columns: minmax(0, 1fr) 260px; } }
-  @media (max-width: 700px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+  @media (max-width: 700px) {
+    .grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; grid-template-areas: "photo" "side" "list"; }
+  }
 
   .stage { position: relative; background: var(--stage); border-radius: 10px; overflow: hidden; aspect-ratio: 4 / 3;
     max-width: 100%; touch-action: manipulation; }
@@ -113,7 +119,7 @@
   </header>
 
   <div class="grid">
-    <section>
+    <section class="photo-area">
       <div class="stage" id="stage">
         <canvas id="view" aria-label="Photo with detected insects circled"></canvas>
         <video id="video" playsinline muted hidden></video>
@@ -190,9 +196,8 @@
         <p class="note" id="saveNote"></p>
       </div>
     </aside>
-  </div>
 
-  <div class="panel">
+  <div class="panel photos-panel">
     <h2>Photos</h2>
     <div class="table-wrap">
       <table>
@@ -204,9 +209,11 @@
       dish, touching insects split, straw fragments dropped. It is a dark-object detector, not a species classifier, so
       check the circles on a few photos.</p>
   </div>
+  </div>
 </div>
 
 <script>
+document.documentElement.lang = 'en';
 (() => {
   const $ = id => document.getElementById(id);
   const REF_R = 699;
