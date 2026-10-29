@@ -1,4 +1,5 @@
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Orius Counter</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -52,7 +53,8 @@
   button:disabled { opacity: .5; cursor: default; }
   button.small { padding: 6px 10px; font-size: 13px; }
   .grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
-  @media (max-width: 880px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+  @media (max-width: 1000px) { .grid { grid-template-columns: minmax(0, 1fr) 260px; } }
+  @media (max-width: 700px) { .grid { grid-template-columns: minmax(0, 1fr); } }
 
   .stage { position: relative; background: var(--stage); border-radius: 10px; overflow: hidden; aspect-ratio: 4 / 3;
     max-width: 100%; touch-action: manipulation; }
@@ -65,7 +67,7 @@
     background: rgba(0, 0, 0, .65); color: #fff; font: 13px var(--font-mono); }
   .stage .tag { position: absolute; left: 12px; top: 12px; padding: 4px 8px; border-radius: 6px; background: var(--amber);
     color: #fff; font: 600 12px var(--font-body); letter-spacing: .03em; }
-  .mag { display: block; width: 100%; aspect-ratio: 1; max-width: 100%; border-radius: 8px; background: var(--stage); cursor: crosshair; }
+  .mag { display: block; width: 100%; aspect-ratio: 1; max-width: min(100%, 300px); margin-inline: auto; border-radius: 8px; background: var(--stage); cursor: crosshair; }
   .hint { color: var(--muted); font-size: 13px; margin: 6px 2px 0; }
 
   aside { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
