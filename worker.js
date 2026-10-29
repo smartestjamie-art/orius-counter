@@ -1,6 +1,6 @@
 /* Runs the counter off the page's main thread. Prepared photos stay cached by id, so
    changing thresholds only reruns detection. Every reply echoes the request's seq. */
-importScripts('orius.js');
+importScripts('debris_model.js', 'orius.js');
 
 const cache = new Map();
 
@@ -16,7 +16,7 @@ onmessage = e => {
       const t = performance.now();
       const r = Orius.count(prep, { gray: m.gray, core: m.core });
       postMessage({ seq: m.seq, count: r.count, points: r.detections.map(d => [d.x, d.y]),
-        debrisRemoved: r.debrisRemoved, ms: Math.round(performance.now() - t) });
+        debrisRemoved: r.debrisRemoved + r.classifierRemoved, ms: Math.round(performance.now() - t) });
     } else if (m.type === 'live') {
       // A preview frame: prepared and counted once, not cached; points as fractions of the frame.
       const prep = Orius.prepare(new Uint8Array(m.rgb), m.width, m.height);

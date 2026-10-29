@@ -323,7 +323,7 @@
       if (dark < p.core_min_pixels) continue;
       components.push({ blob: id, area: c.area, r0, r1, c0, c1 });
     }
-    return { labels, components, parameters: p };
+    return { labels, components, parameters: p, bg };
   }
 
   // ---------- cluster splitting (photobooth_count.resplit) ----------
@@ -464,7 +464,41 @@
     return out;
   }
 
-  function resplit(det, gray, W, s) {
+  // ---------- trained debris classifier (photobooth_count.segment_features / insect_probability) ----------
+
+  function segmentFeatures(inSeg, c, w, n, gray, W, bg, rgb, p, s, nseg) {
+    let cnt = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0, gmin = Infinity, gsum = 0, gsq = 0, core = 0;
+    let red = 0, blue = 0, sat = 0, contrast = 0;
+    for (let i = 0; i < n; i++) {
+      if (!inSeg(i)) continue;
+      const x = i % w, y = (i - x) / w, gi = (y + c.r0) * W + x + c.c0, g = gray[gi], j = gi * 3;
+      cnt++; sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y;
+      if (g < gmin) gmin = g; gsum += g; gsq += g * g; if (g < 65) core++;
+      const R = rgb[j], G = rgb[j + 1], B = rgb[j + 2], mx = Math.max(R, G, B), mn = Math.min(R, G, B);
+      red += R; blue += B; sat += (mx - mn) / (mx + 1); contrast += bg[gi] - g;
+    }
+    const mx = sx / cnt, my = sy / cnt, a = sxx / cnt - mx * mx, d = syy / cnt - my * my, b = sxy / cnt - mx * my;
+    const root = Math.sqrt(((a - d) / 2) ** 2 + b * b), hi = (a + d) / 2 + root, lo = (a + d) / 2 - root;
+    const mean = gsum / cnt;
+    red /= cnt; blue /= cnt;
+    return { area: cnt / s / s, core_frac: core / cnt, min_red: gmin, mean_red: mean, std_red: Math.sqrt(Math.max(0, gsq / cnt - mean * mean)),
+      brown: (red - blue) / (red + 1), sat: sat / cnt, contrast: contrast / cnt, elong: Math.sqrt((hi + 0.1) / (lo + 0.1)), nseg,
+      comp_area: c.area / s / s, radial: Math.hypot(mx + c.c0 - p.center_x, my + c.r0 - p.center_y) / p.radius_x };
+  }
+
+  // Mean leaf probability over the forest; splits compare float32 values like scikit-learn.
+  function insectProbability(f, model) {
+    const x = model.features.map(k => Math.fround(f[k]));
+    let total = 0;
+    for (const t of model.trees) {
+      let node = 0;
+      while (t.l[node] !== -1) node = x[t.f[node]] <= t.t[node] ? t.l[node] : t.r[node];
+      total += t.p[node];
+    }
+    return total / model.trees.length;
+  }
+
+  function resplit(det, gray, W, s, rgb, model) {
     const p = det.parameters, labels = det.labels;
     const splitMin = SPLIT.split_min_area * s * s, segmentMin = SPLIT.segment_min_area * s * s;
     const detections = [];
@@ -501,7 +535,7 @@
         const markers = new Int32Array(n); markers[best] = 1;
         candidates.push({ surface: negDist, markers, count: 1 });
       }
-      let best = [];
+      let best = [], bestSeg = null;
       for (const cand of candidates) {
         const seg = watershed(cand.surface, cand.markers, m, w, h);
         const area = new Int32Array(cand.count + 1), core = new Int32Array(cand.count + 1);
@@ -513,16 +547,23 @@
         }
         const kept = [];
         for (let k = 1; k <= cand.count; k++) {
-          if (area[k] >= segmentMin && core[k] >= p.core_min_pixels) kept.push({ x: sx[k] / area[k] + c.c0, y: sy[k] / area[k] + c.r0, area: area[k], core_pixels: core[k] });
+          if (area[k] >= segmentMin && core[k] >= p.core_min_pixels) kept.push({ k, x: sx[k] / area[k] + c.c0, y: sy[k] / area[k] + c.r0, area: area[k], core_pixels: core[k] });
         }
-        if (kept.length > best.length) best = kept;
+        if (kept.length > best.length) { best = kept; bestSeg = seg; }
       }
       if (!best.length) {
         let a = 0, k = 0, sx = 0, sy = 0;
         for (let i = 0; i < n; i++) if (m[i]) { a++; if (dark[i]) k++; const x = i % w; sx += x; sy += (i - x) / w; }
-        best = [{ x: sx / a + c.c0, y: sy / a + c.r0, area: a, core_pixels: k }];
+        best = [{ k: 0, x: sx / a + c.c0, y: sy / a + c.r0, area: a, core_pixels: k }];
       }
-      for (const d of best) detections.push(Object.assign({ blob: c.blob }, d));
+      for (const d of best) {
+        const out = { blob: c.blob, x: d.x, y: d.y, area: d.area, core_pixels: d.core_pixels };
+        if (rgb && model) {
+          const inSeg = d.k ? i => bestSeg[i] === d.k : i => m[i] === 1;
+          out.p_insect = insectProbability(segmentFeatures(inSeg, c, w, n, gray, W, det.bg, rgb, p, s, best.length), model);
+        }
+        detections.push(out);
+      }
     }
     return detections;
   }
@@ -599,12 +640,16 @@
     const red = new Float64Array(w * h);
     for (let i = 0, j = 0; i < w * h; i++, j += 3) red[i] = prep.rgb[j];
     const det = detect(red, w, h, p);
-    let detections = resplit(det, red, w, s);
+    const model = opts.classifier === false ? null
+      : opts.model || (typeof ORIUS_DEBRIS_MODEL !== 'undefined' ? ORIUS_DEBRIS_MODEL : null);
+    let detections = resplit(det, red, w, s, prep.rgb, model);
     const debris = debrisBlobs(det, prep.rgb, w, s);
     const before = detections.length;
     detections = detections.filter(d => !debris.has(d.blob));
+    const afterRule = detections.length;
+    if (model) detections = detections.filter(d => d.p_insect >= model.threshold);
     return { count: detections.length, detections, parameters: p, components: det.components.length,
-      debrisFragments: debris.size, debrisRemoved: before - detections.length };
+      debrisFragments: debris.size, debrisRemoved: before - afterRule, classifierRemoved: afterRule - detections.length };
   }
 
   return { REFERENCE_RADIUS, SPLIT, DEBRIS, prepare, count, findDish, luma, resizeRGB, gaussianFilter, pyRound };
