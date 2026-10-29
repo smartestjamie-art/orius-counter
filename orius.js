@@ -560,7 +560,8 @@
         const out = { blob: c.blob, x: d.x, y: d.y, area: d.area, core_pixels: d.core_pixels };
         if (rgb && model) {
           const inSeg = d.k ? i => bestSeg[i] === d.k : i => m[i] === 1;
-          out.p_insect = insectProbability(segmentFeatures(inSeg, c, w, n, gray, W, det.bg, rgb, p, s, best.length), model);
+          out.features = segmentFeatures(inSeg, c, w, n, gray, W, det.bg, rgb, p, s, best.length);
+          out.p_insect = insectProbability(out.features, model);
         }
         detections.push(out);
       }
@@ -642,14 +643,14 @@
     const det = detect(red, w, h, p);
     const model = opts.classifier === false ? null
       : opts.model || (typeof ORIUS_DEBRIS_MODEL !== 'undefined' ? ORIUS_DEBRIS_MODEL : null);
-    let detections = resplit(det, red, w, s, prep.rgb, model);
+    // candidates: every split segment, with why it was dropped (straw rule first, then the classifier) or null
+    const candidates = resplit(det, red, w, s, prep.rgb, model);
     const debris = debrisBlobs(det, prep.rgb, w, s);
-    const before = detections.length;
-    detections = detections.filter(d => !debris.has(d.blob));
-    const afterRule = detections.length;
-    if (model) detections = detections.filter(d => d.p_insect >= model.threshold);
-    return { count: detections.length, detections, parameters: p, components: det.components.length,
-      debrisFragments: debris.size, debrisRemoved: before - afterRule, classifierRemoved: afterRule - detections.length };
+    for (const d of candidates) d.dropped = debris.has(d.blob) ? 'straw' : model && d.p_insect < model.threshold ? 'classifier' : null;
+    const detections = candidates.filter(d => !d.dropped);
+    return { count: detections.length, detections, candidates, parameters: p, components: det.components.length,
+      debrisFragments: debris.size, debrisRemoved: candidates.filter(d => d.dropped === 'straw').length,
+      classifierRemoved: candidates.filter(d => d.dropped === 'classifier').length };
   }
 
   return { REFERENCE_RADIUS, SPLIT, DEBRIS, prepare, count, findDish, luma, resizeRGB, gaussianFilter, pyRound };

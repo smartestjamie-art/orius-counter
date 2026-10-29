@@ -52,6 +52,10 @@
   button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
   button:disabled { opacity: .5; cursor: default; }
   button.small { padding: 6px 10px; font-size: 13px; }
+  button[aria-pressed="true"] { background: var(--amber); border-color: var(--amber); color: #fff; }
+  .stage.correcting { cursor: crosshair; outline: 3px solid var(--amber); outline-offset: -3px; }
+  .key { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; color: var(--muted); margin: 8px 0; }
+  .key i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 2px solid; margin-right: 5px; vertical-align: -1px; }
   .grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; grid-template-rows: auto 1fr;
     grid-template-areas: "photo side" "list side"; gap: 16px; align-items: start; }
   .photo-area { grid-area: photo; min-width: 0; }
@@ -145,6 +149,22 @@
           <input type="range" id="magZoom" min="2" max="12" step="1" value="4">
         </div>
         <p class="note" id="magNote">Move the pointer over the photo to inspect the circles.</p>
+      </div>
+
+      <div class="panel">
+        <h2>Correct</h2>
+        <div class="row"><button id="fixBtn" aria-pressed="false">Correct mistakes</button></div>
+        <p class="note" id="fixHelp">Strike out circles that are not Orius and add the ones it missed. The count follows your
+          corrections, and they can be exported to retrain the counter.</p>
+        <div class="key" id="fixKey" hidden>
+          <span><i style="border-color:#22e57f"></i>counted</span><span><i style="border-color:#ff4d4d"></i>struck out</span>
+          <span><i style="border-color:#3db8ff"></i>added by hand</span><span><i style="border-color:#c9d3cc;border-style:dashed"></i>dropped as debris</span>
+        </div>
+        <p class="note" id="fixNote"></p>
+        <div class="row">
+          <button class="small" id="fixClear">Clear on this photo</button>
+          <button class="small" id="fixExport">Export corrections</button>
+        </div>
       </div>
 
       <div class="panel" id="cameraPanel" hidden>
@@ -254,6 +274,10 @@ document.documentElement.lang = 'en';
     });
   }
 
+  function savePhoto(ph) {
+    if (ph.key) store('photos', 'readwrite', s => s.put({ key: ph.key, name: ph.name, blob: ph.blob, added: ph.addedAt, fix: ph.fix }));
+  }
+
   // ---------- decoding ----------
   async function decode(blob) {
     const bmp = await createImageBitmap(blob, { colorSpaceConversion: 'none' });
@@ -270,11 +294,13 @@ document.documentElement.lang = 'en';
   let queue = Promise.resolve();
   const enqueue = fn => (queue = queue.then(fn, fn));
 
-  function addPhoto(blob, name, example, key) {
-    const ph = { id: nextId++, name, example: !!example, status: 'waiting', count: null, points: [], bmp: null, blob, key };
-    if (!example && !key) {
-      ph.key = `${Date.now()}-${ph.id}`;
-      store('photos', 'readwrite', s => s.put({ key: ph.key, name, blob, added: Date.now() }));
+  // rec: the stored record of a photo from an earlier visit ({ key, added, fix })
+  function addPhoto(blob, name, example, rec) {
+    const ph = { id: nextId++, name, example: !!example, status: 'waiting', count: null, points: [], bmp: null, blob,
+      key: rec && rec.key, addedAt: rec ? rec.added : Date.now(), fix: rec && rec.fix || { removed: [], added: [] } };
+    if (!example && !rec) {
+      ph.key = `${ph.addedAt}-${ph.id}`;
+      savePhoto(ph);
     }
     photos.push(ph);
     if (!selected || selected.example) select(ph);
@@ -300,9 +326,12 @@ document.documentElement.lang = 'en';
     ph.status = 'counting'; renderList(); setBusy(`Counting ${ph.name}…`);
     const t = { ...thresholds };
     const r = await call({ type: 'count', id: ph.id, gray: t.gray, core: t.core });
-    Object.assign(ph, { count: r.count, points: r.points, debrisRemoved: r.debrisRemoved, ms: r.ms, gray: t.gray, core: t.core, status: 'done' });
+    Object.assign(ph, { autoCount: r.count, points: r.points, cands: r.cands, feats: r.feats, featureNames: r.featureNames,
+      debrisRemoved: r.debrisRemoved, ms: r.ms, gray: t.gray, core: t.core, status: 'done' });
+    applyFix(ph);
     renderList();
     if (selected === ph) { draw(); renderCount(); }
+    renderFix();
     autoSave(ph);
   }
 
@@ -342,18 +371,119 @@ document.documentElement.lang = 'en';
     }
     if ($('showMarks').checked && ph.points) {
       const r = Math.max(3.5 * dpr, 9 * (ph.dish[2] / REF_R) * s * k);
-      ctx.lineWidth = Math.max(1.2, 1.4 * dpr);
-      for (const pass of [['rgba(0,0,0,.7)', ctx.lineWidth + 1.5 * dpr], [getComputedStyle(document.documentElement).getPropertyValue('--mark').trim() || '#22e57f', ctx.lineWidth]]) {
-        ctx.strokeStyle = pass[0]; ctx.lineWidth = pass[1];
-        ctx.beginPath();
-        for (const [x, y] of ph.points) { const X = ox + x * s * k, Y = oy + y * s * k; ctx.moveTo(X + r, Y); ctx.arc(X, Y, r, 0, Math.PI * 2); }
-        ctx.stroke();
-      }
+      strokeMarks(ctx, ph, (x, y) => [ox + x * s * k, oy + y * s * k], r, Math.max(1.2, 1.4 * dpr), dpr);
     }
   }
 
+  // Circles for the counted insects; while correcting also struck-out, hand-added and dropped candidates.
+  function strokeMarks(ctx, ph, at, r, width, dpr, clip) {
+    const layers = [[ph.fix.kept || ph.points, '#22e57f', 'circle']];
+    if (fixing && ph.cands) {
+      layers.unshift([ph.cands.filter(c => c[3] && !ph.fix.restored.includes(c)), 'rgba(220,228,222,.75)', 'dashed']);
+      layers.push([ph.fix.struck, '#ff4d4d', 'cross'], [ph.fix.added, '#3db8ff', 'plus']);
+    } else if (ph.fix.added.length) layers.push([ph.fix.added, '#22e57f', 'circle']);
+    for (const [pts, color, kind] of layers) {
+      for (const [c, w] of [['rgba(0,0,0,.7)', width + 1.5 * dpr], [color, width]]) {
+        ctx.strokeStyle = c; ctx.lineWidth = w; ctx.setLineDash(kind === 'dashed' ? [3 * dpr, 3 * dpr] : []);
+        ctx.beginPath();
+        for (const p of pts) {
+          const [X, Y] = at(p[0], p[1]);
+          if (clip && (X < -r || Y < -r || X > clip[0] + r || Y > clip[1] + r)) continue;
+          ctx.moveTo(X + r, Y); ctx.arc(X, Y, r, 0, Math.PI * 2);
+          const d = r * 0.7;
+          if (kind === 'cross') { ctx.moveTo(X - d, Y - d); ctx.lineTo(X + d, Y + d); ctx.moveTo(X + d, Y - d); ctx.lineTo(X - d, Y + d); }
+          if (kind === 'plus') { ctx.moveTo(X - d, Y); ctx.lineTo(X + d, Y); ctx.moveTo(X, Y - d); ctx.lineTo(X, Y + d); }
+        }
+        ctx.stroke();
+      }
+    }
+    ctx.setLineDash([]);
+  }
+
+  // ---------- corrections: struck-out and added points, kept in analysed-photo pixels ----------
+  let fixing = false;
+  const markRadius = ph => 9 * ph.dish[2] / REF_R;
+  function nearest(pts, x, y, R) {
+    let best = -1, bd = R;
+    pts.forEach((p, i) => { const d = Math.hypot(p[0] - x, p[1] - y); if (d <= bd) { bd = d; best = i; } });
+    return best;
+  }
+
+  // Match the corrections to this count's candidates: fix.kept (counted), struck, restored (dropped but added back),
+  // labels (1 insect, 0 not, null unknown: dropped and not touched).
+  function applyFix(ph) {
+    const f = ph.fix; f.removed = f.removed || []; f.added = f.added || [];
+    if (!ph.cands) return;
+    const R = markRadius(ph), kept = ph.cands.filter(c => !c[3]), dropped = ph.cands.filter(c => c[3]);
+    const struck = new Set(), restored = [];
+    for (const [x, y] of f.removed) { const i = nearest(kept, x, y, R); if (i >= 0) struck.add(kept[i]); }
+    for (const [x, y] of f.added) { const i = nearest(dropped, x, y, R); if (i >= 0) restored.push(dropped[i]); }
+    f.kept = kept.filter(c => !struck.has(c));
+    f.struck = [...struck]; f.restored = restored;
+    f.labels = ph.cands.map(c => struck.has(c) ? 0 : !c[3] || restored.includes(c) ? 1 : null);
+    ph.count = f.kept.length + f.added.length;
+  }
+
+  function fixAt(ph, x, y) {
+    const f = ph.fix, R = markRadius(ph);
+    let i;
+    if ((i = nearest(f.added, x, y, R)) >= 0) f.added.splice(i, 1);           // undo an added point
+    else if ((i = nearest(f.removed, x, y, R)) >= 0) f.removed.splice(i, 1);  // undo a strike
+    else if ((i = nearest(f.kept, x, y, R)) >= 0) f.removed.push(f.kept[i].slice(0, 2));
+    else {
+      const dropped = ph.cands.filter(c => c[3]), j = nearest(dropped, x, y, R);
+      f.added.push(j >= 0 ? dropped[j].slice(0, 2) : [x, y]);
+    }
+    applyFix(ph); savePhoto(ph);
+    draw(); renderCount(); renderList(); renderFix();
+    clearTimeout(fixAt.t); fixAt.t = setTimeout(() => autoSave(ph), 1500);
+  }
+
+  function renderFix() {
+    $('fixBtn').setAttribute('aria-pressed', fixing); $('fixBtn').textContent = fixing ? 'Done correcting' : 'Correct mistakes';
+    $('stage').classList.toggle('correcting', fixing); $('fixKey').hidden = !fixing;
+    $('stageHint').textContent = fixing
+      ? 'Click a circle that is not an Orius to strike it out, or a missed Orius to add it. Click a mark again to undo. Shift-click zooms in or out.'
+      : 'Click the photo to zoom in 3×, click again to zoom out. Drop photos anywhere on it to add them.';
+    const ph = selected, f = ph && ph.fix;
+    $('fixNote').textContent = !f || !ph.cands ? '' : f.removed.length || f.added.length
+      ? `This photo: ${f.struck.length} struck out, ${f.added.length} added (counter found ${ph.autoCount}).` : 'No corrections on this photo.';
+    const n = photos.filter(p => p.fix.removed.length || p.fix.added.length).length;
+    $('fixExport').disabled = !n; $('fixExport').textContent = n ? `Export corrections (${n} photo${n > 1 ? 's' : ''})` : 'Export corrections';
+  }
+
+  $('fixBtn').onclick = () => {
+    fixing = !fixing;
+    if (fixing && !$('showMarks').checked) $('showMarks').checked = true;
+    renderFix(); draw();
+  };
+  $('fixClear').onclick = () => {
+    const ph = selected; if (!ph || !(ph.fix.removed.length || ph.fix.added.length)) return;
+    ph.fix.removed = []; ph.fix.added = []; applyFix(ph); savePhoto(ph);
+    draw(); renderCount(); renderList(); renderFix(); autoSave(ph);
+  };
+  // One JSON file: for every corrected photo, each candidate's classifier inputs and its label. No pixels.
+  $('fixExport').onclick = () => {
+    const done = photos.filter(p => p.cands && (p.fix.removed.length || p.fix.added.length));
+    if (!done.length) return;
+    const out = { format: 'orius-corrections-1', exported: new Date().toISOString(), features: done[0].featureNames,
+      photos: done.map(p => ({ name: p.name, width: p.origW, height: p.origH, analysed_width: p.prepW, dish: p.dish,
+        gray: p.gray, core: p.core, auto_count: p.autoCount, count: p.count,
+        removed: p.fix.removed, added: p.fix.added, added_without_candidate: p.fix.added.length - p.fix.restored.length,
+        candidates: p.cands.map((c, i) => ({ x: +c[0].toFixed(1), y: +c[1].toFixed(1), p_insect: +c[2].toFixed(4),
+          dropped: ['', 'straw', 'classifier'][c[3]] || null, label: p.fix.labels[i], features: p.feats[i] })) })) };
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
+    offer(`orius_corrections_${stamp}.json`, new Blob([JSON.stringify(out)], { type: 'application/json' }));
+  };
+
   view.addEventListener('click', e => {
     const ph = selected; if (!ph || !ph.bmp) return;
+    if (fixing && !e.shiftKey && ph.cands) {
+      const p = stagePoint(e); if (!p) return;
+      const s = ph.origW / ph.prepW;
+      fixAt(ph, p.x / s, p.y / s);
+      return;
+    }
     if (zoom) { zoom = null; draw(); return; }
     const rect = view.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
     const k = Math.min(view.width / ph.origW, view.height / ph.origH);
@@ -394,12 +524,12 @@ document.documentElement.lang = 'en';
     const sw = mag.width / scale, sh = mag.height / scale, sx = at.x - sw / 2, sy = at.y - sh / 2;
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(src, sx, sy, sw, sh, 0, 0, mag.width, mag.height);
+    if (!liveMode && $('showMarks').checked && ph.dish && ph.points) {
+      const s = ph.origW / ph.prepW;
+      strokeMarks(ctx, ph, (x, y) => [(x * s - sx) * scale, (y * s - sy) * scale], Math.max(4 * dpr, 9 * (ph.dish[2] / REF_R) * s * scale), 2 * dpr, dpr, [mag.width, mag.height]);
+    }
     let pts = [], rPhoto = 0;
     if (liveMode && $('liveToggle').checked) { pts = livePoints.map(([x, y]) => [x * W, y * H]); rPhoto = 6 / shown; }
-    else if (!liveMode && $('showMarks').checked && ph.dish && ph.points) {
-      const s = ph.origW / ph.prepW;
-      pts = ph.points.map(([x, y]) => [x * s, y * s]); rPhoto = 9 * (ph.dish[2] / REF_R) * s;
-    }
     const r = Math.max(4 * dpr, rPhoto * scale);
     for (const [color, width] of [['rgba(0,0,0,.7)', 3.5 * dpr], ['#22e57f', 2 * dpr]]) {
       ctx.strokeStyle = color; ctx.lineWidth = width; ctx.beginPath();
@@ -431,6 +561,7 @@ document.documentElement.lang = 'en';
     const parts = [`${ph.example ? 'Example: ' : ''}${ph.name}`, `${ph.origW} × ${ph.origH}`,
       `gray < ${ph.gray}, dark core < ${ph.core}`];
     if (ph.debrisRemoved) parts.push(`${ph.debrisRemoved} straw hits dropped`);
+    if (ph.count !== ph.autoCount || ph.fix.removed.length) parts.push(`corrected by hand from ${ph.autoCount}`);
     parts.push(`${(ph.ms / 1000).toFixed(1)} s`);
     $('countMeta').textContent = parts.join(' · ');
   }
@@ -456,13 +587,13 @@ document.documentElement.lang = 'en';
     if (!photos.length) { const tr = document.createElement('tr'); const td = document.createElement('td'); td.colSpan = 5; td.className = 'status'; td.textContent = 'No photos yet. Add dish photos to count them.'; tr.append(td); tb.append(tr); }
   }
 
-  function select(ph) { selected = ph; zoom = null; draw(); renderCount(); renderList(); }
+  function select(ph) { selected = ph; zoom = null; draw(); renderCount(); renderList(); renderFix(); }
   function removePhoto(ph) {
     const i = photos.indexOf(ph); if (i < 0) return;
     photos.splice(i, 1); call({ type: 'drop', id: ph.id }).catch(() => {});
     if (ph.key) store('photos', 'readwrite', s => s.delete(ph.key));
     if (selected === ph) selected = photos[0] || null;
-    draw(); renderCount(); renderList();
+    draw(); renderCount(); renderList(); renderFix();
   }
 
   // ---------- adding photos ----------
@@ -508,7 +639,7 @@ document.documentElement.lang = 'en';
     ctx.drawImage(ph.bmp, 0, 0, ph.prepW, ph.prepH);
     const m = Math.max(4, Math.round(9 * ph.dish[2] / REF_R));
     ctx.strokeStyle = '#00ff87'; ctx.lineWidth = 1.5; ctx.beginPath();
-    for (const [x, y] of ph.points) { ctx.moveTo(x + m, y); ctx.arc(x, y, m, 0, Math.PI * 2); }
+    for (const [x, y] of [...(ph.fix.kept || ph.points), ...ph.fix.added]) { ctx.moveTo(x + m, y); ctx.arc(x, y, m, 0, Math.PI * 2); }
     ctx.stroke();
     ctx.strokeStyle = '#ff4fd8'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(ph.dish[0], ph.dish[1], ph.dish[2], 0, Math.PI * 2); ctx.stroke();
     const size = Math.max(24, Math.round(ph.prepH / 30));
@@ -524,8 +655,9 @@ document.documentElement.lang = 'en';
   function csvBlob() {
     const done = photos.filter(p => p.status === 'done');
     const esc = v => /[",\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : v;
-    const rows = [['photo', 'orius', 'gray_threshold', 'core_threshold', 'width', 'height', 'analysed_width', 'dish_x', 'dish_y', 'dish_r', 'straw_hits_dropped', 'example']];
-    for (const p of done) rows.push([p.name, p.count, p.gray, p.core, p.origW, p.origH, p.prepW, p.dish[0], p.dish[1], p.dish[2], p.debrisRemoved, p.example ? 'yes' : '']);
+    const rows = [['photo', 'orius', 'gray_threshold', 'core_threshold', 'width', 'height', 'analysed_width', 'dish_x', 'dish_y', 'dish_r', 'straw_hits_dropped', 'counter_count', 'struck_by_hand', 'added_by_hand', 'example']];
+    for (const p of done) rows.push([p.name, p.count, p.gray, p.core, p.origW, p.origH, p.prepW, p.dish[0], p.dish[1], p.dish[2], p.debrisRemoved,
+      p.autoCount, p.fix.struck.length, p.fix.added.length, p.example ? 'yes' : '']);
     return new Blob([rows.map(r => r.map(esc).join(',')).join('\n') + '\n'], { type: 'text/csv' });
   }
 
@@ -616,8 +748,7 @@ document.documentElement.lang = 'en';
     if (stream) stream.getTracks().forEach(t => t.stop());
     stream = null; clearInterval(liveTimer); clearInterval(magTimer);
     video.hidden = live.hidden = true; view.hidden = false; $('cameraPanel').hidden = true;
-    $('stageHint').textContent = 'Click the photo to zoom in 3×, click again to zoom out. Drop photos anywhere on it to add them.';
-    draw();
+    renderFix(); draw();
   }
 
   function frameRGB(maxWidth) {
@@ -674,10 +805,10 @@ document.documentElement.lang = 'en';
   };
 
   // ---------- start with the example ----------
-  renderList(); renderCount();
+  renderList(); renderCount(); renderFix();
   // Photos from earlier visits come back first; the example shows only when there are none.
   store('photos', 'readonly', s => s.getAll()).then(saved => {
-    if (saved && saved.length) { saved.sort((a, b) => a.added - b.added).forEach(r => addPhoto(r.blob, r.name, false, r.key)); return; }
+    if (saved && saved.length) { saved.sort((a, b) => a.added - b.added).forEach(r => addPhoto(r.blob, r.name, false, r)); return; }
     return fetch('sample.jpg').then(r => r.blob()).then(b => addPhoto(b, 'Arducam dish, 28 Oct', true));
   }).catch(() => { $('empty').hidden = false; renderCount(); });
 })();

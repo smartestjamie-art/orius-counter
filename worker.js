@@ -15,7 +15,11 @@ onmessage = e => {
       const prep = cache.get(m.id);
       const t = performance.now();
       const r = Orius.count(prep, { gray: m.gray, core: m.core });
+      // cands: [x, y, p_insect, dropped (0 kept, 1 straw rule, 2 classifier)]; feats: the classifier's inputs, for corrections
+      const names = self.ORIUS_DEBRIS_MODEL ? ORIUS_DEBRIS_MODEL.features : [];
       postMessage({ seq: m.seq, count: r.count, points: r.detections.map(d => [d.x, d.y]),
+        cands: r.candidates.map(d => [d.x, d.y, d.p_insect == null ? 1 : d.p_insect, d.dropped === 'straw' ? 1 : d.dropped ? 2 : 0]),
+        feats: r.candidates.map(d => d.features ? names.map(k => d.features[k]) : null), featureNames: names,
         debrisRemoved: r.debrisRemoved + r.classifierRemoved, ms: Math.round(performance.now() - t) });
     } else if (m.type === 'live') {
       // A preview frame: prepared and counted once, not cached; points as fractions of the frame.
