@@ -65,6 +65,7 @@
     background: rgba(0, 0, 0, .65); color: #fff; font: 13px var(--font-mono); }
   .stage .tag { position: absolute; left: 12px; top: 12px; padding: 4px 8px; border-radius: 6px; background: var(--amber);
     color: #fff; font: 600 12px var(--font-body); letter-spacing: .03em; }
+  .mag { display: block; width: 100%; aspect-ratio: 1; max-width: 100%; border-radius: 8px; background: var(--stage); cursor: crosshair; }
   .hint { color: var(--muted); font-size: 13px; margin: 6px 2px 0; }
 
   aside { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
@@ -126,6 +127,16 @@
       <div class="panel" aria-live="polite">
         <div class="count"><span class="n" id="countN">–</span><span class="unit">Orius</span></div>
         <div class="meta" id="countMeta">Counting the example photo…</div>
+      </div>
+
+      <div class="panel">
+        <h2>Magnifier</h2>
+        <canvas class="mag" id="mag" aria-label="Magnified view of the photo under the pointer"></canvas>
+        <div class="slider">
+          <label for="magZoom">Zoom</label><output id="magOut">4×</output>
+          <input type="range" id="magZoom" min="2" max="12" step="1" value="4">
+        </div>
+        <p class="note" id="magNote">Move the pointer over the photo to inspect the circles.</p>
       </div>
 
       <div class="panel" id="cameraPanel" hidden>
@@ -206,7 +217,7 @@
 
   const photos = [];
   let selected = null, zoom = null, nextId = 1;
-  let stream = null, liveBusy = false, liveHistory = [], livePoints = [], liveTimer = null;
+  let stream = null, liveBusy = false, liveHistory = [], livePoints = [], liveTimer = null, magTimer = null;
   let thresholds = { gray: 90, core: 65 };
   try { const t = JSON.parse(localStorage.getItem('oriusThresholds') || 'null'); if (t && t.gray && t.core) thresholds = t; } catch {}
 
@@ -267,6 +278,7 @@
   // ---------- drawing ----------
   const view = $('view');
   function draw() {
+    queueMicrotask(drawMag);
     const ph = selected;
     const rect = view.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
     view.width = Math.round(rect.width * dpr); view.height = Math.round(rect.height * dpr);
@@ -282,6 +294,7 @@
     }
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(ph.bmp, ox, oy, ph.origW * k, ph.origH * k);
+    viewT = { k, ox, oy };
     if (!ph.dish) return;
     const s = ph.origW / ph.prepW; // prepared (analysed) pixels -> original pixels
     if ($('showDish').checked) {
@@ -310,6 +323,62 @@
     zoom = { x: ((e.clientX - rect.left) * dpr - ox) / k, y: ((e.clientY - rect.top) * dpr - oy) / k };
     draw();
   });
+  // ---------- magnifier: the area under the pointer, enlarged in the side panel ----------
+  let viewT = null, magAt = null; // viewT: how the photo sits on the stage; magAt: point in photo/frame pixels
+  const mag = $('mag');
+
+  function stagePoint(e) {
+    const vid = $('video');
+    if (!vid.hidden && vid.videoWidth) {
+      const r = vid.getBoundingClientRect(), k = Math.min(r.width / vid.videoWidth, r.height / vid.videoHeight);
+      return { x: (e.clientX - r.left - (r.width - vid.videoWidth * k) / 2) / k, y: (e.clientY - r.top - (r.height - vid.videoHeight * k) / 2) / k };
+    }
+    if (!viewT) return null;
+    const r = view.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    return { x: ((e.clientX - r.left) * dpr - viewT.ox) / viewT.k, y: ((e.clientY - r.top) * dpr - viewT.oy) / viewT.k };
+  }
+  $('stage').addEventListener('pointermove', e => { const p = stagePoint(e); if (p) { magAt = p; drawMag(); } });
+  $('magZoom').oninput = () => { $('magOut').textContent = $('magZoom').value + '×'; drawMag(); };
+
+  function drawMag() {
+    const rect = mag.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    mag.width = Math.round(rect.width * dpr); mag.height = Math.round(rect.height * dpr);
+    const ctx = mag.getContext('2d');
+    ctx.clearRect(0, 0, mag.width, mag.height);
+    const vid = $('video'), liveMode = !vid.hidden && vid.videoWidth > 0;
+    const ph = selected, src = liveMode ? vid : ph && ph.bmp;
+    if (!src) return;
+    const W = liveMode ? vid.videoWidth : ph.origW, H = liveMode ? vid.videoHeight : ph.origH;
+    const at = magAt || { x: W / 2, y: H / 2 };
+    // Zoom is relative to the photo as it appears on the stage.
+    const shown = liveMode ? Math.min(vid.clientWidth / W, vid.clientHeight / H) : viewT ? viewT.k / dpr : 1;
+    const scale = shown * +$('magZoom').value * dpr; // magnifier pixels per photo pixel
+    const sw = mag.width / scale, sh = mag.height / scale, sx = at.x - sw / 2, sy = at.y - sh / 2;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(src, sx, sy, sw, sh, 0, 0, mag.width, mag.height);
+    let pts = [], rPhoto = 0;
+    if (liveMode && $('liveToggle').checked) { pts = livePoints.map(([x, y]) => [x * W, y * H]); rPhoto = 6 / shown; }
+    else if (!liveMode && $('showMarks').checked && ph.dish && ph.points) {
+      const s = ph.origW / ph.prepW;
+      pts = ph.points.map(([x, y]) => [x * s, y * s]); rPhoto = 9 * (ph.dish[2] / REF_R) * s;
+    }
+    const r = Math.max(4 * dpr, rPhoto * scale);
+    for (const [color, width] of [['rgba(0,0,0,.7)', 3.5 * dpr], ['#22e57f', 2 * dpr]]) {
+      ctx.strokeStyle = color; ctx.lineWidth = width; ctx.beginPath();
+      for (const [x, y] of pts) {
+        const X = (x - sx) * scale, Y = (y - sy) * scale;
+        if (X < -r || Y < -r || X > mag.width + r || Y > mag.height + r) continue;
+        ctx.moveTo(X + r, Y); ctx.arc(X, Y, r, 0, Math.PI * 2);
+      }
+      ctx.stroke();
+    }
+    const cx = mag.width / 2, cy = mag.height / 2, m = 9 * dpr;
+    ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = dpr; ctx.beginPath();
+    ctx.moveTo(cx - m, cy); ctx.lineTo(cx + m, cy); ctx.moveTo(cx, cy - m); ctx.lineTo(cx, cy + m); ctx.stroke();
+    $('magNote').textContent = magAt ? `x ${Math.round(at.x)}, y ${Math.round(at.y)} · ${$('magZoom').value}× the stage view`
+      : 'Move the pointer over the photo to inspect the circles.';
+  }
+
   window.addEventListener('resize', () => { draw(); drawLive(); });
   $('showMarks').onchange = draw;
   $('showDish').onchange = draw;
@@ -443,11 +512,12 @@
     } else $('focusRow').hidden = true;
     liveHistory = []; livePoints = [];
     liveTimer = setInterval(liveTick, 400);
+    magTimer = setInterval(drawMag, 120); // the video keeps moving under a still pointer
   }
 
   function stopCamera() {
     if (stream) stream.getTracks().forEach(t => t.stop());
-    stream = null; clearInterval(liveTimer);
+    stream = null; clearInterval(liveTimer); clearInterval(magTimer);
     video.hidden = live.hidden = true; view.hidden = false; $('cameraPanel').hidden = true;
     $('stageHint').textContent = 'Click the photo to zoom in 3×, click again to zoom out. Drop photos anywhere on it to add them.';
     draw();
@@ -480,6 +550,7 @@
   }
 
   function drawLive() {
+    queueMicrotask(drawMag);
     if (live.hidden) return;
     const rect = live.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
     live.width = Math.round(rect.width * dpr); live.height = Math.round(rect.height * dpr);
