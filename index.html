@@ -185,6 +185,7 @@
           <button class="small" id="focusAutoBtn">Autofocus</button>
         </div>
         <p class="note" id="focusNote"></p>
+        <div class="row" id="focusConnect" hidden><button class="small" id="focusConnectBtn">Connect focus helper</button></div>
         <div class="row">
           <button id="captureBtn" class="primary">Capture &amp; count</button>
           <button id="stopCamBtn">Stop camera</button>
@@ -738,23 +739,12 @@ document.documentElement.lang = 'en';
     const track = stream.getVideoTracks()[0];
     sel.value = track.getSettings().deviceId || '';
     const caps = track.getCapabilities ? track.getCapabilities() : {};
-    $('focusBtns').hidden = true; $('focusNote').textContent = '';
-    const h = await helper();
-    if (h) { // the focus helper on this Mac drives the camera's own focus control
-      const f = $('focus'); f.min = h.min; f.max = h.max; f.step = 1; f.value = h.value;
-      $('focusOut').textContent = h.auto ? 'auto' : h.value; $('focusRow').hidden = $('focusBtns').hidden = false;
-      f.oninput = () => {
-        $('focusOut').textContent = f.value;
-        clearTimeout(f.t); f.t = setTimeout(() => helper(`?value=${f.value}`), 60);
-      };
-    } else if (caps.focusDistance) { // manual focus where the browser exposes it (not Safari or Chrome on macOS)
+    $('focusBtns').hidden = $('focusConnect').hidden = true; $('focusNote').textContent = '';
+    if (!await connectHelper() && caps.focusDistance) { // manual focus where the browser exposes it (not Safari or Chrome on macOS)
       const f = $('focus'); f.min = caps.focusDistance.min; f.max = caps.focusDistance.max; f.step = caps.focusDistance.step || 0.01;
       f.value = track.getSettings().focusDistance || caps.focusDistance.min; $('focusOut').textContent = 'auto'; $('focusRow').hidden = false;
       f.oninput = () => { track.applyConstraints({ advanced: [{ focusMode: 'manual', focusDistance: +f.value }] }).catch(() => {}); $('focusOut').textContent = (+f.value).toFixed(2); };
-    } else {
-      $('focusRow').hidden = true;
-      $('focusNote').textContent = 'Manual focus: double-click “Start focus helper” in the Orius计数/focus_helper folder, then press Stop camera and Use camera again.';
-    }
+    } else if (!focusConnected) $('focusRow').hidden = true;
     liveHistory = []; livePoints = [];
     liveTimer = setInterval(liveTick, 400);
     magTimer = setInterval(drawMag, 120); // the video keeps moving under a still pointer
@@ -868,10 +858,35 @@ document.documentElement.lang = 'en';
   async function helper(query) {
     const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 1500);
     try {
-      const r = await fetch('http://127.0.0.1:8777/focus' + (query || ''), { signal: ctl.signal, cache: 'no-store' });
+      const r = await fetch('http://127.0.0.1:8777/focus' + (query || ''), { signal: ctl.signal, cache: 'no-store', targetAddressSpace: 'loopback' });
       return r.ok ? await r.json() : null;
     } catch { return null; } finally { clearTimeout(t); }
   }
+
+  // Show the focus slider when the helper answers; otherwise offer a button. Chrome asks before a website
+  // may reach a program on this Mac, and it asks reliably when the request comes from a click.
+  let focusConnected = false;
+  async function connectHelper() {
+    const h = await helper();
+    focusConnected = !!h;
+    if (!h) {
+      $('focusConnect').hidden = false;
+      $('focusNote').textContent = 'Manual focus: double-click “Start focus helper” in the Orius计数/focus_helper folder, then press Connect focus helper. If Chrome asks to let this site reach apps on this device, choose Allow.';
+      return false;
+    }
+    const f = $('focus'); f.min = h.min; f.max = h.max; f.step = 1; f.value = h.value;
+    $('focusOut').textContent = h.auto ? 'auto' : h.value; $('focusRow').hidden = $('focusBtns').hidden = false;
+    f.oninput = () => {
+      $('focusOut').textContent = f.value;
+      clearTimeout(f.t); f.t = setTimeout(() => helper(`?value=${f.value}`), 60);
+    };
+    $('focusConnect').hidden = true; $('focusNote').textContent = '';
+    return true;
+  }
+  $('focusConnectBtn').onclick = async () => {
+    $('focusNote').textContent = 'Connecting…';
+    if (!await connectHelper()) $('focusNote').textContent = 'Could not reach the focus helper. Is its window open? In Chrome, click the icon at the left of the address bar, open Site settings and set “Local network access” (or “Apps on device”) to Allow, then try again.';
+  };
 
   // Step through the focus range and keep the setting whose weakest band (left, centre, right) is sharpest:
   // coarse steps of 32, then steps of 4 around the best.
