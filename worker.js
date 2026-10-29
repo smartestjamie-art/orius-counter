@@ -20,7 +20,7 @@ onmessage = e => {
       postMessage({ seq: m.seq, count: r.count, points: r.detections.map(d => [d.x, d.y]),
         cands: r.candidates.map(d => [d.x, d.y, d.p_insect == null ? 1 : d.p_insect, d.dropped === 'straw' ? 1 : d.dropped ? 2 : 0]),
         feats: r.candidates.map(d => d.features ? names.map(k => d.features[k]) : null), featureNames: names,
-        debrisRemoved: r.debrisRemoved + r.classifierRemoved, ms: Math.round(performance.now() - t) });
+        debrisRemoved: r.debrisRemoved + r.classifierRemoved, backlit: r.backlit, ms: Math.round(performance.now() - t) });
     } else if (m.type === 'live') {
       // A preview frame: prepared and counted once, not cached; points as fractions of the frame.
       const prep = Orius.prepare(new Uint8Array(m.rgb), m.width, m.height);

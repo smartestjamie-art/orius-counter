@@ -14,6 +14,9 @@
   const SPLIT = { split_min_area: 220, peak_min_distance: 8, peak_min_height: 2.0, segment_min_area: 40,
     seed_sigma: 1.0, seed_depth: 3 };
   const DEBRIS = { min_length: 70, min_solidity: 0.75, min_brownness: 0.35 };
+  // Backlit dishes: the dark dish-wall ring is cut out of the mask (photobooth_count.BACKLIT).
+  const BACKLIT = { sectors: 120, search: [0.95, 1.03], min_dip: 50, min_ring_sectors: 0.5, half_width: 4, keep_dark: 50,
+    near: 6, open_radius: 2, seed_depth: 4 };
 
   // Python's round(): halves go to the even neighbour.
   function pyRound(x) {
@@ -323,7 +326,98 @@
       if (dark < p.core_min_pixels) continue;
       components.push({ blob: id, area: c.area, r0, r1, c0, c1 });
     }
-    return { labels, components, parameters: p, bg };
+    return { labels, components, parameters: p, bg, filled };
+  }
+
+  // ---------- backlit dish wall (photobooth_count.wall_ring / remove_wall) ----------
+
+  function medianOf(v) {
+    v.sort((a, b) => a - b);
+    const k = v.length >> 1;
+    return v.length % 2 ? v[k] : (v[k - 1] + v[k]) / 2;
+  }
+
+  /** Mask of the dark dish-wall ring, or null when the photo is not backlit. */
+  function wallRing(gray, w, h, cx, cy, r) {
+    const B = BACKLIT, n = B.sectors;
+    const lo = Math.ceil(B.search[0] * r), hi = Math.floor(B.search[1] * r), K = hi - lo + 1;
+    const y0 = Math.max(0, cy - hi - 1), y1 = Math.min(h, cy + hi + 2), x0 = Math.max(0, cx - hi - 1), x1 = Math.min(w, cx + hi + 2);
+    const buckets = Array.from({ length: n * K }, () => []);
+    const sectorOf = (x, y) => Math.min(Math.floor((Math.atan2(y - cy, x - cx) + Math.PI) / (2 * Math.PI) * n), n - 1);
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+      const k = Math.floor(Math.sqrt((x - cx) ** 2 + (y - cy) ** 2) + 0.5);
+      if (k >= lo && k <= hi) buckets[sectorOf(x, y) * K + k - lo].push(gray[y * w + x]);
+    }
+    const line = new Int32Array(n), dark = new Uint8Array(n);
+    let ringSectors = 0;
+    for (let a = 0; a < n; a++) {
+      const med = [];
+      for (let k = 0; k < K; k++) { const b = buckets[a * K + k]; med.push(b.length ? medianOf(b) : 255); }
+      const sm = med.map((_, i) => { const part = med.slice(Math.max(0, i - 1), i + 2); return part.reduce((t, v) => t + v, 0) / part.length; });
+      let best = 0;
+      for (let i = 1; i < K; i++) if (sm[i] < sm[best]) best = i;
+      line[a] = lo + best;
+      dark[a] = medianOf(sm.slice()) - sm[best] > B.min_dip ? 1 : 0;
+      ringSectors += dark[a];
+    }
+    if (ringSectors < B.min_ring_sectors * n) return null;
+    const smooth = new Float64Array(n);
+    for (let a = 0; a < n; a++) {
+      if (!dark[a]) continue;
+      const near = [];
+      for (let k = -2; k <= 2; k++) { const b = (a + k + n) % n; if (dark[b]) near.push(line[b]); }
+      smooth[a] = medianOf(near);
+    }
+    const ring = new Uint8Array(w * h);
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+      const a = sectorOf(x, y);
+      if (dark[a] && Math.abs(Math.sqrt((x - cx) ** 2 + (y - cy) ** 2) - smooth[a]) <= B.half_width) ring[y * w + x] = 1;
+    }
+    return ring;
+  }
+
+  // Binary erosion / dilation with a symmetric structuring element given as offsets; outside counts as 0.
+  // Only pixels inside box [y0, y1) x [x0, x1) are computed; the rest of the output is 0.
+  function morph(mask, w, h, offs, erode, box) {
+    const out = new Uint8Array(w * h);
+    for (let y = box[0]; y < box[1]; y++) for (let x = box[2]; x < box[3]; x++) {
+      let v = erode ? 1 : 0;
+      for (const [dx, dy] of offs) {
+        const X = x + dx, Y = y + dy, on = X >= 0 && Y >= 0 && X < w && Y < h && mask[Y * w + X];
+        if (erode && !on) { v = 0; break; }
+        if (!erode && on) { v = 1; break; }
+      }
+      out[y * w + x] = v;
+    }
+    return out;
+  }
+
+  /** Cut the ring out of the detector's mask and relabel, as detect() would. */
+  function removeWall(det, ring, gray, w, h) {
+    const B = BACKLIT, p = det.parameters, n = w * h;
+    const filled = new Uint8Array(n);
+    for (let i = 0; i < n; i++) filled[i] = det.filled[i] && !(ring[i] && gray[i] >= B.keep_dark) ? 1 : 0;
+    // The ring lies inside the dish's bounding square, so the morphology only needs that square plus a margin.
+    const [cx, cy] = [p.center_x, p.center_y], m = Math.ceil(BACKLIT.search[1] * p.radius_x) + 2 + B.near + B.open_radius;
+    const box = [Math.max(0, cy - m), Math.min(h, cy + m + 1), Math.max(0, cx - m), Math.min(w, cx + m + 1)];
+    let near = ring;
+    const cross = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]];
+    for (let k = 0; k < B.near; k++) near = morph(near, w, h, cross, false, box);
+    const R = B.open_radius, disk = [];
+    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) if (Math.sqrt(dx * dx + dy * dy) <= R) disk.push([dx, dy]);
+    const opened = morph(morph(filled, w, h, disk, true, box), w, h, disk, false, box);
+    for (let i = 0; i < n; i++) if (near[i]) filled[i] = opened[i];
+    const { labels, n: nlab, info } = label4(filled, w, h);
+    const core = new Int32Array(nlab + 1);
+    for (let i = 0; i < n; i++) if (labels[i] && gray[i] < p.core_threshold) core[labels[i]]++;
+    const components = [];
+    for (let id = 1; id <= nlab; id++) {
+      const c = info[id];
+      if (c.area < p.component_min_area || core[id] < p.core_min_pixels) continue;
+      components.push({ blob: id, area: c.area, r0: Math.max(0, c.minr - 2), r1: Math.min(h, c.maxr + 3),
+        c0: Math.max(0, c.minc - 2), c1: Math.min(w, c.maxc + 3) });
+    }
+    return { ...det, labels, components, filled };
   }
 
   // ---------- cluster splitting (photobooth_count.resplit) ----------
@@ -498,7 +592,7 @@
     return total / model.trees.length;
   }
 
-  function resplit(det, gray, W, s, rgb, model) {
+  function resplit(det, gray, W, s, rgb, model, seedDepth) {
     const p = det.parameters, labels = det.labels;
     const splitMin = SPLIT.split_min_area * s * s, segmentMin = SPLIT.segment_min_area * s * s;
     const detections = [];
@@ -524,7 +618,7 @@
         const smooth = gaussianFilter(g, w, h, SPLIT.seed_sigma * s);
         const inv = new Float64Array(n);
         for (let i = 0; i < n; i++) inv[i] = m[i] ? 255 - smooth[i] : 0;
-        const hm = hMaxima(inv, w, h, SPLIT.seed_depth);
+        const hm = hMaxima(inv, w, h, seedDepth);
         for (let i = 0; i < n; i++) hm[i] = hm[i] && m[i];
         const seeds = label4(hm, w, h);
         if (seeds.n) candidates.push({ surface: smooth, markers: seeds.labels, count: seeds.n });
@@ -582,7 +676,7 @@
     return lower.concat(upper);
   }
 
-  function debrisBlobs(det, rgb, W, s) {
+  function debrisBlobs(det, rgb, W, s, minBrownness) {
     const found = new Set();
     for (const c of det.components) {
       let n = 0, sx = 0, sy = 0;
@@ -610,7 +704,7 @@
       let r = 0, bl = 0;
       for (let i = 0; i < n; i++) { const j = (ys[i] * W + xs[i]) * 3; r += rgb[j]; bl += rgb[j + 2]; }
       r /= n; bl /= n;
-      if (n / inside >= DEBRIS.min_solidity && (r - bl) / Math.max(r, 1) >= DEBRIS.min_brownness) found.add(c.blob);
+      if (n / inside >= DEBRIS.min_solidity && (r - bl) / Math.max(r, 1) >= minBrownness) found.add(c.blob);
     }
     return found;
   }
@@ -640,18 +734,21 @@
     if (opts.contrast != null) p.contrast_threshold = opts.contrast;
     const red = new Float64Array(w * h);
     for (let i = 0, j = 0; i < w * h; i++, j += 3) red[i] = prep.rgb[j];
-    const det = detect(red, w, h, p);
+    let det = detect(red, w, h, p);
+    // Backlit photos: cut the dark dish wall out, split on deeper dark cores, and sticks need not look brown.
+    const ring = wallRing(red, w, h, cx, cy, r);
+    if (ring) det = removeWall(det, ring, red, w, h);
     const model = opts.classifier === false ? null
       : opts.model || (typeof ORIUS_DEBRIS_MODEL !== 'undefined' ? ORIUS_DEBRIS_MODEL : null);
     // candidates: every split segment, with why it was dropped (straw rule first, then the classifier) or null
-    const candidates = resplit(det, red, w, s, prep.rgb, model);
-    const debris = debrisBlobs(det, prep.rgb, w, s);
+    const candidates = resplit(det, red, w, s, prep.rgb, model, ring ? BACKLIT.seed_depth : SPLIT.seed_depth);
+    const debris = debrisBlobs(det, prep.rgb, w, s, ring ? -Infinity : DEBRIS.min_brownness);
     for (const d of candidates) d.dropped = debris.has(d.blob) ? 'straw' : model && d.p_insect < model.threshold ? 'classifier' : null;
     const detections = candidates.filter(d => !d.dropped);
-    return { count: detections.length, detections, candidates, parameters: p, components: det.components.length,
+    return { count: detections.length, detections, candidates, parameters: p, components: det.components.length, backlit: !!ring,
       debrisFragments: debris.size, debrisRemoved: candidates.filter(d => d.dropped === 'straw').length,
       classifierRemoved: candidates.filter(d => d.dropped === 'classifier').length };
   }
 
-  return { REFERENCE_RADIUS, SPLIT, DEBRIS, prepare, count, findDish, luma, resizeRGB, gaussianFilter, pyRound };
+  return { REFERENCE_RADIUS, SPLIT, DEBRIS, BACKLIT, prepare, count, findDish, luma, resizeRGB, gaussianFilter, pyRound };
 });

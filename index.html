@@ -327,7 +327,7 @@ document.documentElement.lang = 'en';
     const t = { ...thresholds };
     const r = await call({ type: 'count', id: ph.id, gray: t.gray, core: t.core });
     Object.assign(ph, { autoCount: r.count, points: r.points, cands: r.cands, feats: r.feats, featureNames: r.featureNames,
-      debrisRemoved: r.debrisRemoved, ms: r.ms, gray: t.gray, core: t.core, status: 'done' });
+      debrisRemoved: r.debrisRemoved, backlit: r.backlit, ms: r.ms, gray: t.gray, core: t.core, status: 'done' });
     applyFix(ph);
     renderList();
     if (selected === ph) { draw(); renderCount(); }
@@ -560,6 +560,7 @@ document.documentElement.lang = 'en';
     if (ph.count == null) { $('countMeta').textContent = `${ph.name}: ${ph.status}`; return; }
     const parts = [`${ph.example ? 'Example: ' : ''}${ph.name}`, `${ph.origW} × ${ph.origH}`,
       `gray < ${ph.gray}, dark core < ${ph.core}`];
+    if (ph.backlit) parts.push('backlit: dish wall ignored');
     if (ph.debrisRemoved) parts.push(`${ph.debrisRemoved} straw hits dropped`);
     if (ph.count !== ph.autoCount || ph.fix.removed.length) parts.push(`corrected by hand from ${ph.autoCount}`);
     parts.push(`${(ph.ms / 1000).toFixed(1)} s`);
