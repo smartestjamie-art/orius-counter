@@ -55,7 +55,8 @@
   button[aria-pressed="true"] { background: var(--amber); border-color: var(--amber); color: #fff; }
   .stage.correcting { cursor: crosshair; outline: 3px solid var(--amber); outline-offset: -3px; }
   .key { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; color: var(--muted); margin: 8px 0; }
-  .key i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 2px solid; margin-right: 5px; vertical-align: -1px; }
+  .key i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 1px solid #000; margin-right: 5px; vertical-align: 0; }
+  .key span:last-child i { border: 2px solid; width: 8px; height: 8px; }
   .grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; grid-template-rows: auto 1fr;
     grid-template-areas: "photo side" "list side"; gap: 16px; align-items: start; }
   .photo-area { grid-area: photo; min-width: 0; }
@@ -125,7 +126,7 @@
   <div class="grid">
     <section class="photo-area">
       <div class="stage" id="stage">
-        <canvas id="view" aria-label="Photo with detected insects circled"></canvas>
+        <canvas id="view" aria-label="Photo with a dot on each detected insect"></canvas>
         <video id="video" playsinline muted hidden></video>
         <canvas id="liveOverlay" hidden></canvas>
         <div class="empty" id="empty" hidden>Drop dish photos here, or press <b>&nbsp;Add photos…</b></div>
@@ -148,17 +149,17 @@
           <label for="magZoom">Zoom</label><output id="magOut">4×</output>
           <input type="range" id="magZoom" min="2" max="12" step="1" value="4">
         </div>
-        <p class="note" id="magNote">Move the pointer over the photo to inspect the circles.</p>
+        <p class="note" id="magNote">Move the pointer over the photo to inspect the dots.</p>
       </div>
 
       <div class="panel">
         <h2>Correct</h2>
         <div class="row"><button id="fixBtn" aria-pressed="false">Correct mistakes</button></div>
-        <p class="note" id="fixHelp">Strike out circles that are not Orius and add the ones it missed. The count follows your
+        <p class="note" id="fixHelp">Strike out dots that are not Orius and add the ones it missed. The count follows your
           corrections, and they can be exported to retrain the counter.</p>
         <div class="key" id="fixKey" hidden>
-          <span><i style="border-color:#22e57f"></i>counted</span><span><i style="border-color:#ff4d4d"></i>struck out</span>
-          <span><i style="border-color:#3db8ff"></i>added by hand</span><span><i style="border-color:#c9d3cc;border-style:dashed"></i>dropped as debris</span>
+          <span><i style="background:#22e57f"></i>counted</span><span><i style="background:#ff4d4d"></i>struck out</span>
+          <span><i style="background:#3db8ff"></i>added by hand</span><span><i style="border-color:#c9d3cc"></i>dropped as debris</span>
         </div>
         <p class="note" id="fixNote"></p>
         <div class="row">
@@ -209,7 +210,7 @@
 
       <div class="panel">
         <h2>Show</h2>
-        <label class="check"><input type="checkbox" id="showMarks" checked> Circles on detected insects</label>
+        <label class="check"><input type="checkbox" id="showMarks" checked> Dots on detected insects</label>
         <label class="check"><input type="checkbox" id="showDish" checked> Dish outline</label>
       </div>
 
@@ -236,7 +237,7 @@
     </div>
     <p class="note">Photos stay in this browser; nothing is uploaded. How it counts: dark blobs in the red channel inside the
       dish, touching insects split, straw fragments dropped. It is a dark-object detector, not a species classifier, so
-      check the circles on a few photos.</p>
+      check the dots on a few photos.</p>
   </div>
   </div>
 </div>
@@ -381,29 +382,25 @@ document.documentElement.lang = 'en';
     }
   }
 
-  // Circles for the counted insects; while correcting also struck-out, hand-added and dropped candidates.
+  // Dots on the counted insects; while correcting also struck-out, hand-added and dropped candidates.
+  // r is the insect's radius on screen; the dot is a third of it.
   function strokeMarks(ctx, ph, at, r, width, dpr, clip) {
-    const layers = [[ph.fix.kept || ph.points, '#22e57f', 'circle']];
+    const layers = [[ph.fix.kept || ph.points, '#22e57f', 'dot']];
     if (fixing && ph.cands) {
-      layers.unshift([ph.cands.filter(c => c[3] && !ph.fix.restored.includes(c)), 'rgba(220,228,222,.75)', 'dashed']);
-      layers.push([ph.fix.struck, '#ff4d4d', 'cross'], [ph.fix.added, '#3db8ff', 'plus']);
-    } else if (ph.fix.added.length) layers.push([ph.fix.added, '#22e57f', 'circle']);
+      layers.unshift([ph.cands.filter(c => c[3] && !ph.fix.restored.includes(c)), 'rgba(220,228,222,.9)', 'hollow']);
+      layers.push([ph.fix.struck, '#ff4d4d', 'dot'], [ph.fix.added, '#3db8ff', 'dot']);
+    } else if (ph.fix.added.length) layers.push([ph.fix.added, '#22e57f', 'dot']);
+    const rd = Math.max(2.2 * dpr, r / 3);
     for (const [pts, color, kind] of layers) {
-      for (const [c, w] of [['rgba(0,0,0,.7)', width + 1.5 * dpr], [color, width]]) {
-        ctx.strokeStyle = c; ctx.lineWidth = w; ctx.setLineDash(kind === 'dashed' ? [3 * dpr, 3 * dpr] : []);
-        ctx.beginPath();
-        for (const p of pts) {
-          const [X, Y] = at(p[0], p[1]);
-          if (clip && (X < -r || Y < -r || X > clip[0] + r || Y > clip[1] + r)) continue;
-          ctx.moveTo(X + r, Y); ctx.arc(X, Y, r, 0, Math.PI * 2);
-          const d = r * 0.7;
-          if (kind === 'cross') { ctx.moveTo(X - d, Y - d); ctx.lineTo(X + d, Y + d); ctx.moveTo(X + d, Y - d); ctx.lineTo(X - d, Y + d); }
-          if (kind === 'plus') { ctx.moveTo(X - d, Y); ctx.lineTo(X + d, Y); ctx.moveTo(X, Y - d); ctx.lineTo(X, Y + d); }
-        }
-        ctx.stroke();
+      ctx.beginPath();
+      for (const p of pts) {
+        const [X, Y] = at(p[0], p[1]);
+        if (clip && (X < -rd || Y < -rd || X > clip[0] + rd || Y > clip[1] + rd)) continue;
+        ctx.moveTo(X + rd, Y); ctx.arc(X, Y, rd, 0, Math.PI * 2);
       }
+      if (kind === 'dot') { ctx.fillStyle = color; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.75)'; ctx.lineWidth = Math.max(1, 0.8 * dpr); ctx.stroke(); }
+      else { ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.lineWidth = 2.5 * dpr; ctx.stroke(); ctx.strokeStyle = color; ctx.lineWidth = 1.2 * dpr; ctx.stroke(); }
     }
-    ctx.setLineDash([]);
   }
 
   // ---------- corrections: struck-out and added points, kept in analysed-photo pixels ----------
@@ -449,7 +446,7 @@ document.documentElement.lang = 'en';
     $('fixBtn').setAttribute('aria-pressed', fixing); $('fixBtn').textContent = fixing ? 'Done correcting' : 'Correct mistakes';
     $('stage').classList.toggle('correcting', fixing); $('fixKey').hidden = !fixing;
     $('stageHint').textContent = fixing
-      ? 'Click a circle that is not an Orius to strike it out, or a missed Orius to add it. Click a mark again to undo. Shift-click zooms in or out.'
+      ? 'Click a dot that is not an Orius to strike it out, or a missed Orius to add it. Click a mark again to undo. Shift-click zooms in or out.'
       : 'Click the photo to zoom in 3×, click again to zoom out. Drop photos anywhere on it to add them.';
     const ph = selected, f = ph && ph.fix;
     $('fixNote').textContent = !f || !ph.cands ? '' : f.removed.length || f.added.length
@@ -536,21 +533,19 @@ document.documentElement.lang = 'en';
     }
     let pts = [], rPhoto = 0;
     if (liveMode && $('liveToggle').checked) { pts = livePoints.map(([x, y]) => [x * W, y * H]); rPhoto = 6 / shown; }
-    const r = Math.max(4 * dpr, rPhoto * scale);
-    for (const [color, width] of [['rgba(0,0,0,.7)', 3.5 * dpr], ['#22e57f', 2 * dpr]]) {
-      ctx.strokeStyle = color; ctx.lineWidth = width; ctx.beginPath();
-      for (const [x, y] of pts) {
-        const X = (x - sx) * scale, Y = (y - sy) * scale;
-        if (X < -r || Y < -r || X > mag.width + r || Y > mag.height + r) continue;
-        ctx.moveTo(X + r, Y); ctx.arc(X, Y, r, 0, Math.PI * 2);
-      }
-      ctx.stroke();
+    const r = Math.max(2.2 * dpr, rPhoto * scale / 3);
+    ctx.beginPath();
+    for (const [x, y] of pts) {
+      const X = (x - sx) * scale, Y = (y - sy) * scale;
+      if (X < -r || Y < -r || X > mag.width + r || Y > mag.height + r) continue;
+      ctx.moveTo(X + r, Y); ctx.arc(X, Y, r, 0, Math.PI * 2);
     }
+    ctx.fillStyle = '#22e57f'; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.75)'; ctx.lineWidth = dpr; ctx.stroke();
     const cx = mag.width / 2, cy = mag.height / 2, m = 9 * dpr;
     ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = dpr; ctx.beginPath();
     ctx.moveTo(cx - m, cy); ctx.lineTo(cx + m, cy); ctx.moveTo(cx, cy - m); ctx.lineTo(cx, cy + m); ctx.stroke();
     $('magNote').textContent = magAt ? `x ${Math.round(at.x)}, y ${Math.round(at.y)} · ${$('magZoom').value}× the stage view`
-      : 'Move the pointer over the photo to inspect the circles.';
+      : 'Move the pointer over the photo to inspect the dots.';
   }
 
   window.addEventListener('resize', () => { draw(); drawLive(); });
@@ -642,14 +637,14 @@ document.documentElement.lang = 'en';
   };
 
   async function markedBlob(ph) {
-    // Same picture as the Python overlay: the analysed-size photo, circles of radius 9 at the notebook scale.
+    // The analysed-size photo with a dot on every counted insect.
     const c = document.createElement('canvas'); c.width = ph.prepW; c.height = ph.prepH;
     const ctx = c.getContext('2d');
     ctx.drawImage(ph.bmp, 0, 0, ph.prepW, ph.prepH);
-    const m = Math.max(4, Math.round(9 * ph.dish[2] / REF_R));
-    ctx.strokeStyle = '#00ff87'; ctx.lineWidth = 1.5; ctx.beginPath();
+    const m = Math.max(2.5, 3.5 * ph.dish[2] / REF_R);
+    ctx.beginPath();
     for (const [x, y] of [...(ph.fix.kept || ph.points), ...ph.fix.added]) { ctx.moveTo(x + m, y); ctx.arc(x, y, m, 0, Math.PI * 2); }
-    ctx.stroke();
+    ctx.fillStyle = '#00ff87'; ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
     ctx.strokeStyle = '#ff4fd8'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(ph.dish[0], ph.dish[1], ph.dish[2], 0, Math.PI * 2); ctx.stroke();
     const size = Math.max(24, Math.round(ph.prepH / 30));
     ctx.font = `600 ${size}px "Instrument Sans", Arial, sans-serif`;
@@ -736,7 +731,7 @@ document.documentElement.lang = 'en';
     }
     video.srcObject = stream; await video.play();
     video.hidden = live.hidden = false; view.hidden = true; $('cameraPanel').hidden = false;
-    $('stageHint').textContent = 'Live preview. Green circles show the latest live count.';
+    $('stageHint').textContent = 'Live preview. Green dots show the latest live count.';
     const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
     const sel = $('camSelect'); sel.textContent = '';
     for (const d of devs) sel.add(new Option(d.label || 'Camera', d.deviceId));
@@ -807,9 +802,9 @@ document.documentElement.lang = 'en';
     if (!$('liveToggle').checked || !video.videoWidth) return;
     const k = Math.min(live.width / video.videoWidth, live.height / video.videoHeight);
     const w = video.videoWidth * k, h = video.videoHeight * k, ox = (live.width - w) / 2, oy = (live.height - h) / 2;
-    ctx.strokeStyle = '#22e57f'; ctx.lineWidth = 1.5 * dpr; ctx.beginPath();
-    for (const [x, y] of livePoints) { const X = ox + x * w, Y = oy + y * h; ctx.moveTo(X + 5 * dpr, Y); ctx.arc(X, Y, 5 * dpr, 0, Math.PI * 2); }
-    ctx.stroke();
+    ctx.beginPath();
+    for (const [x, y] of livePoints) { const X = ox + x * w, Y = oy + y * h; ctx.moveTo(X + 2.5 * dpr, Y); ctx.arc(X, Y, 2.5 * dpr, 0, Math.PI * 2); }
+    ctx.fillStyle = '#22e57f'; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.75)'; ctx.lineWidth = dpr; ctx.stroke();
   }
 
   $('cameraBtn').onclick = () => startCamera();
