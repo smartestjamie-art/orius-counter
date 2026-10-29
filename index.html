@@ -191,6 +191,7 @@
         <h2>Save</h2>
         <div class="row">
           <button id="saveImg">Marked photo (JPG)</button>
+          <button id="saveOrig">Original photo</button>
           <button id="saveCsv">All counts (CSV)</button>
         </div>
         <p class="note" id="saveNote"></p>
@@ -247,7 +248,7 @@ document.documentElement.lang = 'en';
   const enqueue = fn => (queue = queue.then(fn, fn));
 
   function addPhoto(blob, name, example) {
-    const ph = { id: nextId++, name, example: !!example, status: 'waiting', count: null, points: [], bmp: null };
+    const ph = { id: nextId++, name, example: !!example, status: 'waiting', count: null, points: [], bmp: null, blob };
     photos.push(ph);
     if (!selected || selected.example) select(ph);
     renderList();
@@ -462,6 +463,9 @@ document.documentElement.lang = 'en';
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 10000);
   }
+
+  // The photo exactly as added or captured, e.g. to keep camera shots that exist only in this browser.
+  $('saveOrig').onclick = () => { const ph = selected; if (ph && ph.blob) offer(/\.(jpe?g|png|webp)$/i.test(ph.name) ? ph.name : ph.name + '.jpg', ph.blob); };
 
   $('saveImg').onclick = async () => {
     const ph = selected; if (!ph || ph.count == null) return;
