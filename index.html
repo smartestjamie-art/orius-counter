@@ -194,6 +194,8 @@
           <button id="saveOrig">Original photo</button>
           <button id="saveCsv">All counts (CSV)</button>
         </div>
+        <div class="row"><button id="autoBtn">Auto-save to folder…</button></div>
+        <p class="note" id="autoNote">Photos are kept in this browser, so a refresh does not lose them.</p>
         <p class="note" id="saveNote"></p>
       </div>
     </aside>
@@ -231,6 +233,27 @@ document.documentElement.lang = 'en';
   let thresholds = { gray: 90, core: 65 };
   try { const t = JSON.parse(localStorage.getItem('oriusThresholds') || 'null'); if (t && t.gray && t.core) thresholds = t; } catch {}
 
+  // ---------- keeping photos: IndexedDB survives a refresh; an optional folder receives files ----------
+  const db = new Promise(resolve => {
+    try {
+      const req = indexedDB.open('orius-counter', 1);
+      req.onupgradeneeded = () => { req.result.createObjectStore('photos', { keyPath: 'key' }); req.result.createObjectStore('settings'); };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch { resolve(null); }
+  });
+  async function store(name, mode, fn) {
+    const d = await db;
+    if (!d) return undefined;
+    return new Promise(resolve => {
+      try {
+        const tx = d.transaction(name, mode), req = fn(tx.objectStore(name));
+        tx.oncomplete = () => resolve(req && req.result);
+        tx.onerror = tx.onabort = () => resolve(undefined);
+      } catch { resolve(undefined); }
+    });
+  }
+
   // ---------- decoding ----------
   async function decode(blob) {
     const bmp = await createImageBitmap(blob, { colorSpaceConversion: 'none' });
@@ -247,8 +270,12 @@ document.documentElement.lang = 'en';
   let queue = Promise.resolve();
   const enqueue = fn => (queue = queue.then(fn, fn));
 
-  function addPhoto(blob, name, example) {
-    const ph = { id: nextId++, name, example: !!example, status: 'waiting', count: null, points: [], bmp: null, blob };
+  function addPhoto(blob, name, example, key) {
+    const ph = { id: nextId++, name, example: !!example, status: 'waiting', count: null, points: [], bmp: null, blob, key };
+    if (!example && !key) {
+      ph.key = `${Date.now()}-${ph.id}`;
+      store('photos', 'readwrite', s => s.put({ key: ph.key, name, blob, added: Date.now() }));
+    }
     photos.push(ph);
     if (!selected || selected.example) select(ph);
     renderList();
@@ -276,6 +303,7 @@ document.documentElement.lang = 'en';
     Object.assign(ph, { count: r.count, points: r.points, debrisRemoved: r.debrisRemoved, ms: r.ms, gray: t.gray, core: t.core, status: 'done' });
     renderList();
     if (selected === ph) { draw(); renderCount(); }
+    autoSave(ph);
   }
 
   function recountAll() {
@@ -432,6 +460,7 @@ document.documentElement.lang = 'en';
   function removePhoto(ph) {
     const i = photos.indexOf(ph); if (i < 0) return;
     photos.splice(i, 1); call({ type: 'drop', id: ph.id }).catch(() => {});
+    if (ph.key) store('photos', 'readwrite', s => s.delete(ph.key));
     if (selected === ph) selected = photos[0] || null;
     draw(); renderCount(); renderList();
   }
@@ -469,6 +498,10 @@ document.documentElement.lang = 'en';
 
   $('saveImg').onclick = async () => {
     const ph = selected; if (!ph || ph.count == null) return;
+    offer(ph.name.replace(/\.[^.]+$/, '') + '_detections.jpg', await markedBlob(ph));
+  };
+
+  async function markedBlob(ph) {
     // Same picture as the Python overlay: the analysed-size photo, circles of radius 9 at the notebook scale.
     const c = document.createElement('canvas'); c.width = ph.prepW; c.height = ph.prepH;
     const ctx = c.getContext('2d');
@@ -483,18 +516,69 @@ document.documentElement.lang = 'en';
     ctx.lineWidth = Math.max(3, size / 8); ctx.strokeStyle = '#000'; ctx.fillStyle = '#00ff87';
     const label = `${ph.count} Orius   gray < ${ph.gray}, core < ${ph.core}   ${ph.name}`;
     ctx.strokeText(label, 20, 20 + size); ctx.fillText(label, 20, 20 + size);
-    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
-    offer(ph.name.replace(/\.[^.]+$/, '') + '_detections.jpg', blob);
-  };
+    return new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
+  }
 
-  $('saveCsv').onclick = () => {
+  $('saveCsv').onclick = () => { if (photos.some(p => p.status === 'done')) offer('orius_counts.csv', csvBlob()); };
+
+  function csvBlob() {
     const done = photos.filter(p => p.status === 'done');
-    if (!done.length) return;
     const esc = v => /[",\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : v;
     const rows = [['photo', 'orius', 'gray_threshold', 'core_threshold', 'width', 'height', 'analysed_width', 'dish_x', 'dish_y', 'dish_r', 'straw_hits_dropped', 'example']];
     for (const p of done) rows.push([p.name, p.count, p.gray, p.core, p.origW, p.origH, p.prepW, p.dish[0], p.dish[1], p.dish[2], p.debrisRemoved, p.example ? 'yes' : '']);
-    offer('orius_counts.csv', new Blob([rows.map(r => r.map(esc).join(',')).join('\n') + '\n'], { type: 'text/csv' }));
+    return new Blob([rows.map(r => r.map(esc).join(',')).join('\n') + '\n'], { type: 'text/csv' });
+  }
+
+  // Auto-save: after every count, write the original, the marked photo and orius_counts.csv into a folder
+  // the viewer picked once (File System Access API: Chrome and Edge, page opened directly).
+  let folder = null, pendingFolder = null;
+  if (!('showDirectoryPicker' in window) || window.self !== window.top) $('autoBtn').hidden = true;
+
+  async function useFolder(handle, ask) {
+    let state = await handle.queryPermission({ mode: 'readwrite' });
+    if (state !== 'granted' && ask) state = await handle.requestPermission({ mode: 'readwrite' });
+    if (state !== 'granted') return false;
+    folder = handle; pendingFolder = null;
+    $('autoBtn').textContent = 'Stop auto-save';
+    $('autoNote').textContent = `Auto-saving every photo to the folder “${handle.name}”: original, marked photo and orius_counts.csv.`;
+    for (const ph of photos) if (ph.status === 'done') await autoSave(ph);
+    return true;
+  }
+
+  async function writeFile(name, blob) {
+    const fh = await folder.getFileHandle(name, { create: true });
+    const w = await fh.createWritable(); await w.write(blob); await w.close();
+  }
+
+  async function autoSave(ph) {
+    if (!folder || ph.example || ph.status !== 'done') return;
+    try {
+      await writeFile(/\.(jpe?g|png|webp)$/i.test(ph.name) ? ph.name : ph.name + '.jpg', ph.blob);
+      await writeFile(ph.name.replace(/\.[^.]+$/, '') + '_detections.jpg', await markedBlob(ph));
+      await writeFile('orius_counts.csv', csvBlob());
+    } catch (err) { $('autoNote').textContent = 'Auto-save failed: ' + err.message; }
+  }
+
+  $('autoBtn').onclick = async () => {
+    if (folder) {
+      folder = null; store('settings', 'readwrite', s => s.delete('folder'));
+      $('autoBtn').textContent = 'Auto-save to folder…';
+      $('autoNote').textContent = 'Auto-save is off. Photos are still kept in this browser.';
+      return;
+    }
+    if (pendingFolder && await useFolder(pendingFolder, true)) return;
+    try {
+      const h = await showDirectoryPicker({ id: 'orius', mode: 'readwrite' });
+      if (await useFolder(h, true)) store('settings', 'readwrite', s => s.put(h, 'folder'));
+    } catch (err) { if (err.name !== 'AbortError') $('autoNote').textContent = 'Could not use that folder: ' + err.message; }
   };
+
+  // Reuse the folder from last time; after a browser restart it needs one click to allow again.
+  if (!$('autoBtn').hidden) store('settings', 'readonly', s => s.get('folder')).then(async h => {
+    if (!h || await useFolder(h, false)) return;
+    pendingFolder = h;
+    $('autoBtn').textContent = `Resume auto-save to “${h.name}”`;
+  });
 
   // ---------- camera (only when the page is opened directly, not embedded in another page) ----------
   const video = $('video'), live = $('liveOverlay');
@@ -591,7 +675,10 @@ document.documentElement.lang = 'en';
 
   // ---------- start with the example ----------
   renderList(); renderCount();
-  fetch('sample.jpg').then(r => r.blob()).then(b => addPhoto(b, 'Arducam dish, 28 Oct', true))
-    .catch(() => { $('empty').hidden = false; renderCount(); });
+  // Photos from earlier visits come back first; the example shows only when there are none.
+  store('photos', 'readonly', s => s.getAll()).then(saved => {
+    if (saved && saved.length) { saved.sort((a, b) => a.added - b.added).forEach(r => addPhoto(r.blob, r.name, false, r.key)); return; }
+    return fetch('sample.jpg').then(r => r.blob()).then(b => addPhoto(b, 'Arducam dish, 28 Oct', true));
+  }).catch(() => { $('empty').hidden = false; renderCount(); });
 })();
 </script>
