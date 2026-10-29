@@ -179,6 +179,11 @@
           <label for="focus">Manual focus</label><output id="focusOut"></output>
           <input type="range" id="focus">
         </div>
+        <div class="row" id="focusBtns" hidden>
+          <button class="small" id="focusSweepBtn">Find sharpest focus</button>
+          <button class="small" id="focusAutoBtn">Autofocus</button>
+        </div>
+        <p class="note" id="focusNote"></p>
         <div class="row">
           <button id="captureBtn" class="primary">Capture &amp; count</button>
           <button id="stopCamBtn">Stop camera</button>
@@ -738,11 +743,23 @@ document.documentElement.lang = 'en';
     const track = stream.getVideoTracks()[0];
     sel.value = track.getSettings().deviceId || '';
     const caps = track.getCapabilities ? track.getCapabilities() : {};
-    if (caps.focusDistance) { // manual focus where the browser exposes it (not Safari or Chrome on macOS)
+    $('focusBtns').hidden = true; $('focusNote').textContent = '';
+    const h = await helper();
+    if (h) { // the focus helper on this Mac drives the camera's own focus control
+      const f = $('focus'); f.min = h.min; f.max = h.max; f.step = 1; f.value = h.value;
+      $('focusOut').textContent = h.auto ? 'auto' : h.value; $('focusRow').hidden = $('focusBtns').hidden = false;
+      f.oninput = () => {
+        $('focusOut').textContent = f.value;
+        clearTimeout(f.t); f.t = setTimeout(() => helper(`?value=${f.value}`), 60);
+      };
+    } else if (caps.focusDistance) { // manual focus where the browser exposes it (not Safari or Chrome on macOS)
       const f = $('focus'); f.min = caps.focusDistance.min; f.max = caps.focusDistance.max; f.step = caps.focusDistance.step || 0.01;
       f.value = track.getSettings().focusDistance || caps.focusDistance.min; $('focusOut').textContent = 'auto'; $('focusRow').hidden = false;
       f.oninput = () => { track.applyConstraints({ advanced: [{ focusMode: 'manual', focusDistance: +f.value }] }).catch(() => {}); $('focusOut').textContent = (+f.value).toFixed(2); };
-    } else $('focusRow').hidden = true;
+    } else {
+      $('focusRow').hidden = true;
+      $('focusNote').textContent = 'Manual focus: double-click “Start focus helper” in the Orius计数/focus_helper folder, then press Stop camera and Use camera again.';
+    }
     liveHistory = []; livePoints = [];
     liveTimer = setInterval(liveTick, 400);
     magTimer = setInterval(drawMag, 120); // the video keeps moving under a still pointer
@@ -850,6 +867,46 @@ document.documentElement.lang = 'en';
     const soft = names.filter((_, i) => f[i] < 0.5 * max);
     return soft.length ? `⚠ ${soft.join(' and ')} out of focus` : '';
   }
+
+  // The focus helper (focus_helper/orius_focus on this Mac) sets the camera's UVC focus, which browsers
+  // on macOS cannot. null when it is not running.
+  async function helper(query) {
+    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 1500);
+    try {
+      const r = await fetch('http://127.0.0.1:8777/focus' + (query || ''), { signal: ctl.signal, cache: 'no-store' });
+      return r.ok ? await r.json() : null;
+    } catch { return null; } finally { clearTimeout(t); }
+  }
+
+  // Step through the focus range and keep the setting whose weakest band (left, centre, right) is sharpest:
+  // coarse steps of 32, then steps of 4 around the best.
+  let sweeping = false;
+  $('focusSweepBtn').onclick = async () => {
+    if (sweeping || !stream) return;
+    sweeping = true; $('focusSweepBtn').disabled = true;
+    const f = $('focus'), lo = +f.min, hi = +f.max;
+    const measure = async v => {
+      await helper(`?value=${v}`);
+      await new Promise(r => setTimeout(r, 350)); // the lens moves and a new frame arrives
+      const score = Math.min(...sharpness(video, video.videoWidth, video.videoHeight));
+      f.value = v; $('focusOut').textContent = v; $('focusNote').textContent = `Trying focus ${v}… sharpness ${score.toFixed(1)}`;
+      return score;
+    };
+    let best = lo, bestScore = -1;
+    for (let v = lo; v <= hi && stream; v += 32) { const sc = await measure(v); if (sc > bestScore) { bestScore = sc; best = v; } }
+    const centre = best;
+    for (let v = Math.max(lo, centre - 28); v <= Math.min(hi, centre + 28) && stream; v += 4) {
+      const sc = await measure(v); if (sc > bestScore) { bestScore = sc; best = v; }
+    }
+    await helper(`?value=${best}`);
+    f.value = best; $('focusOut').textContent = best;
+    $('focusNote').textContent = `Focus set to ${best} (sharpness ${bestScore.toFixed(1)}). It stays there until you press Autofocus.`;
+    $('focusSweepBtn').disabled = false; sweeping = false;
+  };
+  $('focusAutoBtn').onclick = async () => {
+    const h = await helper('?auto=1');
+    if (h) { $('focusOut').textContent = 'auto'; $('focusNote').textContent = 'Autofocus is on.'; }
+  };
 
   // Live focus meter, so the dish and camera can be levelled before capturing.
   setInterval(() => {
