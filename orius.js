@@ -9,7 +9,7 @@
 
   // Counter version, stored with every result so a photo keeps the count it was given. Change it whenever
   // detection, splitting or the debris model (debris_model.js) changes.
-  const VERSION = '2026-10-30i';
+  const VERSION = '2026-10-30j';
   const REFERENCE_RADIUS = 699; // outer dish rim in the notebook's photo
   const DEFAULTS = { background_sigma: 12, gray_threshold: 75, contrast_threshold: 32, component_min_area: 55,
     core_threshold: 50, core_min_pixels: 25 };
@@ -18,7 +18,7 @@
     seed_sigma: 1.0, seed_depth: 3 };
   const DEBRIS = { min_length: 70, min_solidity: 0.75, min_brownness: 0.35 };
   // Backlit dishes: the dark dish-wall ring is cut out of the mask (photobooth_count.BACKLIT).
-  const BACKLIT = { sectors: 120, search: [0.95, 1.03], lip_scan: [0.80, 0.94, 0.02], lip_min_sectors: 80, wall_ratio: 0.983, min_dip: 50, min_ring_sectors: 0.5, half_width: 4, keep_dark: 50, keep_open: 3,
+  const BACKLIT = { sectors: 120, search: [0.95, 1.03], lip_scan: [0.80, 0.94, 0.02], lip_min_sectors: 80, wall_ratio: 0.983, min_dip: 50, min_ring_sectors: 0.5, half_width: 4, max_half: 16, keep_dark: 50, keep_off: 25, keep_grow: 10,
     near: 6, open_radius: 2, split: { seed_depth: 5, peak_min_distance: 10, segment_min_area: 60 } };
   // One insect split in two, on front-lit photos (photobooth_count.MERGE).
   const MERGE = { min_solidity: 0.83, max_length: 42, max_width: 18 };
@@ -372,7 +372,7 @@
       const k = Math.floor(Math.sqrt((x - cx) ** 2 + (y - cy) ** 2) + 0.5);
       if (k >= lo && k <= hi) buckets[sectorOf(x, y, cx, cy) * K + k - lo].push(gray[y * w + x]);
     }
-    const line = new Int32Array(n), dark = new Uint8Array(n);
+    const line = new Int32Array(n), dark = new Uint8Array(n), width = new Float64Array(n), depth = new Float64Array(n);
     for (let a = 0; a < n; a++) {
       const med = [];
       for (let k = 0; k < K; k++) { const b = buckets[a * K + k]; med.push(b.length ? medianOf(b) : 255); }
@@ -380,9 +380,16 @@
       let best = 0;
       for (let i = 1; i < K; i++) if (sm[i] < sm[best]) best = i;
       line[a] = lo + best;
-      dark[a] = medianOf(sm.slice()) - sm[best] > B.min_dip ? 1 : 0;
+      const md = medianOf(sm.slice());
+      dark[a] = md - sm[best] > B.min_dip ? 1 : 0;
+      // half width of the dark band: the run around the minimum darker than halfway to the sector's median
+      const half = sm[best] + 0.5 * (md - sm[best]);
+      let i1 = best, i2 = best;
+      while (i1 > 0 && sm[i1 - 1] < half) i1--;
+      while (i2 < K - 1 && sm[i2 + 1] < half) i2++;
+      width[a] = Math.max(best - i1, i2 - best); depth[a] = sm[best];
     }
-    return { line, dark, box: [y0, y1, x0, x1] };
+    return { line, dark, width, depth, box: [y0, y1, x0, x1] };
   }
 
   function sectorOf(x, y, cx, cy) {
@@ -407,13 +414,18 @@
   /** Mask of the dark dish-wall ring, or null when the photo is not backlit. */
   function wallRing(gray, w, h, cx, cy, r) {
     const B = BACKLIT;
-    const { line, dark, box: [y0, y1, x0, x1] } = wallLine(gray, w, h, cx, cy, r, B.search);
+    const { line, dark, width, depth, box: [y0, y1, x0, x1] } = wallLine(gray, w, h, cx, cy, r, B.search);
     if (countOf(dark) < B.min_ring_sectors * B.sectors) return null;
-    const smooth = smoothLine(line, dark);
+    const smooth = smoothLine(line, dark), n = line.length;
+    // 1: a light line: cut half_width, keep what is darker (insects); 2: a line darker than keep_dark: cut its whole
+    // dark run and keep only dark areas reaching off it (photobooth_count.wall_ring)
+    const med5 = v => Array.from(v, (_, a) => medianOf([-2, -1, 0, 1, 2].map(k => v[(a + k + n) % n])));
+    const wm = med5(width), dm = med5(depth);
+    const hw = wm.map((v, a) => dm[a] < B.keep_dark ? Math.min(B.max_half, Math.max(B.half_width, v + 1)) : B.half_width);
     const ring = new Uint8Array(w * h);
     for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
       const a = sectorOf(x, y, cx, cy);
-      if (dark[a] && Math.abs(Math.sqrt((x - cx) ** 2 + (y - cy) ** 2) - smooth[a]) <= B.half_width) ring[y * w + x] = 1;
+      if (dark[a] && Math.abs(Math.sqrt((x - cx) ** 2 + (y - cy) ** 2) - smooth[a]) <= hw[a]) ring[y * w + x] = dm[a] < B.keep_dark ? 2 : 1;
     }
     return ring;
   }
@@ -476,19 +488,26 @@
   function removeWall(det, ring, gray, w, h) {
     const B = BACKLIT, p = det.parameters, n = w * h;
     // The ring lies inside the dish's bounding square, so the morphology only needs that square plus a margin.
-    const [cx, cy] = [p.center_x, p.center_y], m = Math.ceil(BACKLIT.search[1] * p.radius_x) + 2 + B.near + Math.max(B.open_radius, B.keep_open);
+    const [cx, cy] = [p.center_x, p.center_y], s = p.radius_x / REFERENCE_RADIUS, grow = Math.max(1, pyRound(B.keep_grow * s));
+    const m = Math.ceil(BACKLIT.search[1] * p.radius_x) + 2 + 2 * B.near + Math.max(B.open_radius, grow);
     const box = [Math.max(0, cy - m), Math.min(h, cy + m + 1), Math.max(0, cx - m), Math.min(w, cx + m + 1)];
     let near = ring;
     const cross = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]];
     for (let k = 0; k < B.near; k++) near = morph(near, w, h, cross, false, box);
     const diskOf = R => { const d = []; for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) if (Math.sqrt(dx * dx + dy * dy) <= R) d.push([dx, dy]); return d; };
-    // Dark pixels on the ring stay only where wider than the wall line itself (an insect on the wall): in sharp
-    // photos the wall line is darker than keep_dark but only a few pixels wide.
-    let dark = new Uint8Array(n);
-    for (let i = 0; i < n; i++) dark[i] = near[i] && gray[i] < B.keep_dark ? 1 : 0;
-    if (B.keep_open) { const kd = diskOf(B.keep_open); dark = morph(morph(dark, w, h, kd, true, box), w, h, kd, false, box); }
+    // dark pixels near the ring; seeds: dark areas off a dark line's band of at least keep_off pixels, grown back
+    // into the band by keep_grow pixels through dark pixels (an insect lying across the line, not the line)
+    let wide = near;
+    for (let k = 0; k < B.near; k++) wide = morph(wide, w, h, cross, false, box);
+    const dark = new Uint8Array(n), seedMask = new Uint8Array(n);
+    for (let i = 0; i < n; i++) { dark[i] = gray[i] < B.keep_dark && det.filled[i] && wide[i] ? 1 : 0; seedMask[i] = dark[i] && ring[i] !== 2 ? 1 : 0; }
+    const { labels: sl, info: si } = label4(seedMask, w, h);
+    let keep = new Uint8Array(n);
+    for (let i = 0; i < n; i++) if (sl[i] && si[sl[i]].area >= B.keep_off * s * s) keep[i] = 1;
+    for (let k = 0; k < grow; k++) { keep = morph(keep, w, h, cross, false, box); for (let i = 0; i < n; i++) keep[i] &= dark[i]; }
+    for (let i = 0; i < n; i++) if (dark[i] && ring[i] === 1) keep[i] = 1;
     const filled = new Uint8Array(n);
-    for (let i = 0; i < n; i++) filled[i] = det.filled[i] && !(ring[i] && !dark[i]) ? 1 : 0;
+    for (let i = 0; i < n; i++) filled[i] = det.filled[i] && !(ring[i] && !keep[i]) ? 1 : 0;
     const disk = diskOf(B.open_radius);
     const opened = morph(morph(filled, w, h, disk, true, box), w, h, disk, false, box);
     for (let i = 0; i < n; i++) if (near[i]) filled[i] = opened[i];

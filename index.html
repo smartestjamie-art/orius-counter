@@ -54,6 +54,7 @@
   button.small { padding: 6px 10px; font-size: 13px; }
   button[aria-pressed="true"] { background: var(--amber); border-color: var(--amber); color: #fff; }
   .stage.correcting { cursor: crosshair; outline: 3px solid var(--amber); outline-offset: -3px; }
+  td.rowBtns { white-space: nowrap; } td.rowBtns button + button { margin-left: 4px; }
   .key { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; color: var(--muted); margin: 8px 0; }
   .key i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 1px solid #000; margin-right: 5px; vertical-align: 0; }
   .key span:last-child i { border: 2px solid; width: 8px; height: 8px; }
@@ -183,7 +184,7 @@
           <button class="small" id="focusAutoBtn">Autofocus</button>
         </div>
         <div id="stackRow" hidden>
-          <label class="check"><input type="checkbox" id="stackToggle"> Focus stack: shoot at each region's sharpest focus, merge</label>
+          <label class="check"><input type="checkbox" id="stackToggle"> Focus stack: shoot across the sharp range, align, merge</label>
           <div class="row"><button class="small" id="stackRangeBtn">Find stack range</button></div>
         </div>
         <label class="check"><input type="checkbox" id="avgToggle" checked> Average 3 frames per shot (less noise; keep the dish still)</label>
@@ -287,7 +288,7 @@ document.documentElement.lang = 'en';
   const worker = new Worker('worker.js');
   const pending = new Map();
   let seq = 0;
-  worker.onmessage = e => { const p = pending.get(e.data.seq); if (p) { pending.delete(e.data.seq); e.data.error ? p.reject(new Error(e.data.error)) : p.resolve(e.data); } };
+  worker.onmessage = e => { if (e.data.progress) { if (capturing) $('captureBtn').textContent = e.data.progress; return; } const p = pending.get(e.data.seq); if (p) { pending.delete(e.data.seq); e.data.error ? p.reject(new Error(e.data.error)) : p.resolve(e.data); } };
   worker.onerror = e => setBusy('The counter failed to start: ' + (e.message || 'unknown error'));
   const call = (msg, transfer) => new Promise((resolve, reject) => { msg.seq = ++seq; pending.set(seq, { resolve, reject }); worker.postMessage(msg, transfer || []); });
 
@@ -635,10 +636,22 @@ document.documentElement.lang = 'en';
     return { x: ((e.clientX - r.left) * dpr - viewT.ox) / viewT.k, y: ((e.clientY - r.top) * dpr - viewT.oy) / viewT.k };
   }
   // The magnifier follows the pointer until a click on the photo pins it there; clicking the magnifier lets go.
-  let magPinned = false;
-  $('stage').addEventListener('pointermove', e => { if (magPinned) return; const p = stagePoint(e); if (p) { magAt = p; drawMag(); } });
-  view.addEventListener('click', e => { if (!selected || !selected.bmp) return; const p = stagePoint(e); if (p) { magAt = p; magPinned = true; drawMag(); } }, true);
-  mag.addEventListener('click', () => { magPinned = false; drawMag(); });
+  // magPin: { shown, frame } while pinned; it keeps the magnification of the moment of the click, and on the live
+  // preview a still of that frame, so the magnifier stays put while the photo zooms or the video moves.
+  let magPin = null;
+  $('stage').addEventListener('pointermove', e => { if (magPin) return; const p = stagePoint(e); if (p) { magAt = p; drawMag(); } });
+  $('stage').addEventListener('click', e => {
+    if (e.target.closest('button') || dragged) return; // a drag or pinch of the photo is not a click
+    const vid = $('video'), live = !vid.hidden && vid.videoWidth > 0;
+    if (!live && (!selected || !selected.bmp)) return;
+    const p = stagePoint(e); if (!p) return;
+    const dpr = window.devicePixelRatio || 1;
+    let frame = null;
+    if (live) { frame = document.createElement('canvas'); frame.width = vid.videoWidth; frame.height = vid.videoHeight; frame.getContext('2d').drawImage(vid, 0, 0); }
+    const shown = live ? Math.min(vid.clientWidth / vid.videoWidth, vid.clientHeight / vid.videoHeight) : viewT ? viewT.k / dpr : 1;
+    magAt = p; magPin = { shown, frame }; drawMag();
+  }, true);
+  mag.addEventListener('click', () => { magPin = null; drawMag(); });
   $('magZoom').oninput = () => { $('magOut').textContent = $('magZoom').value + '×'; drawMag(); };
 
   function drawMag() {
@@ -647,12 +660,12 @@ document.documentElement.lang = 'en';
     const ctx = mag.getContext('2d');
     ctx.clearRect(0, 0, mag.width, mag.height);
     const vid = $('video'), liveMode = !vid.hidden && vid.videoWidth > 0;
-    const ph = selected, src = liveMode ? vid : ph && ph.bmp;
+    const ph = selected, src = magPin && magPin.frame ? magPin.frame : liveMode ? vid : ph && ph.bmp;
     if (!src) return;
     const W = liveMode ? vid.videoWidth : ph.origW, H = liveMode ? vid.videoHeight : ph.origH;
     const at = magAt || { x: W / 2, y: H / 2 };
     // Zoom is relative to the photo as it appears on the stage.
-    const shown = liveMode ? Math.min(vid.clientWidth / W, vid.clientHeight / H) : viewT ? viewT.k / dpr : 1;
+    const shown = magPin ? magPin.shown : liveMode ? Math.min(vid.clientWidth / W, vid.clientHeight / H) : viewT ? viewT.k / dpr : 1;
     const scale = shown * +$('magZoom').value * dpr; // magnifier pixels per photo pixel
     const sw = mag.width / scale, sh = mag.height / scale, sx = at.x - sw / 2, sy = at.y - sh / 2;
     ctx.imageSmoothingQuality = 'high';
@@ -679,7 +692,7 @@ document.documentElement.lang = 'en';
     ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = dpr; ctx.beginPath();
     ctx.moveTo(cx - m, cy); ctx.lineTo(cx + m, cy); ctx.moveTo(cx, cy - m); ctx.lineTo(cx, cy + m); ctx.stroke();
     $('magNote').textContent = magAt ? `x ${Math.round(at.x)}, y ${Math.round(at.y)} · ${$('magZoom').value}× the stage view` +
-      (magPinned ? ' · pinned: click the magnifier to follow the pointer again' : ' · click the photo to pin')
+      (magPin ? ' · pinned: click the magnifier to follow the pointer again' : ' · click the photo to pin')
       : 'Move the pointer over the photo to inspect the dots.';
   }
 
@@ -732,7 +745,15 @@ document.documentElement.lang = 'en';
       const del = document.createElement('td'); del.style.textAlign = 'right';
       const b = document.createElement('button'); b.className = 'small'; b.textContent = 'Remove'; b.setAttribute('aria-label', `Remove ${ph.name}`);
       b.onclick = ev => { ev.stopPropagation(); removePhoto(ph); };
-      del.append(b);
+      // Recount: run the latest counter on this photo again (corrections are kept and re-matched)
+      const rc = document.createElement('button'); rc.className = 'small'; rc.textContent = 'Recount'; rc.setAttribute('aria-label', `Recount ${ph.name}`);
+      rc.disabled = !ph.dish || ph.example;
+      rc.onclick = ev => { ev.stopPropagation(); enqueue(async () => { try { await countPhoto(ph); } catch (err) { ph.status = 'error: ' + err.message; renderList(); } setBusy(''); }); };
+      // Retake: open the camera; the next capture replaces this photo and reuses its sample ID
+      const rt = document.createElement('button'); rt.className = 'small'; rt.textContent = 'Retake'; rt.setAttribute('aria-label', `Retake ${ph.name}`);
+      rt.hidden = $('cameraBtn').hidden || ph.example;
+      rt.onclick = ev => { ev.stopPropagation(); retakeOf = ph; select(ph); startCamera(); };
+      del.className = 'rowBtns'; del.append(rc, rt, b);
       tr.append(name, size, thr, n, del);
       tr.onclick = () => select(ph);
       tb.append(tr);
@@ -748,7 +769,7 @@ document.documentElement.lang = 'en';
 
   // Choosing a photo shows it: the camera preview, which hides the photo view, is stopped (Use camera brings it back).
   function select(ph) {
-    selected = ph; zoom = null;
+    selected = ph; zoom = null; magPin = null;
     if (stream && !capturing) stopCamera();
     draw(); renderCount(); renderList(); renderFix();
   }
@@ -1002,7 +1023,9 @@ document.documentElement.lang = 'en';
   // Focus stack from per-region autofocus: sweep the focus (coarse around the current value, then fine across
   // where the regions peaked), take each of the 3 x 3 regions' sharpest focus, shoot once per distinct value and
   // merge (the worker keeps the sharpest version of every area).
-  const STACK = { grid: 3, coarse: 32, reach: 192, fine: 8, margin: 16, merge: 8, maxShots: 6, sweepSettle: 300, settle: 300 };
+  // Shots go every `step` focus units across the range where the regions are sharp (+ margin), at most maxShots; each
+  // waits `settle` ms for the lens and drops `drain` buffered frames, so no shot is taken while the lens still moves.
+  const STACK = { grid: 3, coarse: 32, reach: 192, fine: 8, margin: 16, step: 12, maxShots: 16, sweepSettle: 350, settle: 700, drain: 3 };
   let stackShots = null; // focus values found by "Find stack range", reused by every stacked capture
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -1027,18 +1050,15 @@ document.documentElement.lang = 'en';
     return out;
   }
 
-  // Focus values to shoot: each region's sharpest focus; values within STACK.merge of each other share one shot
-  // (their mean), and the merge distance widens until there are at most STACK.maxShots shots.
-  function stackPositions(peaks) {
-    const v = [...peaks].sort((a, b) => a - b);
-    for (let tol = STACK.merge; ; tol *= 1.5) {
-      const groups = [];
-      for (const p of v) {
-        const g = groups[groups.length - 1];
-        if (g && p - g[0] <= tol) g.push(p); else groups.push([p]);
-      }
-      if (groups.length <= STACK.maxShots) return groups.map(g => Math.round(g.reduce((a, b) => a + b, 0) / g.length));
-    }
+  // Focus values to shoot: every STACK.step across the regions' sharpest values plus a margin, the step widened until
+  // there are at most STACK.maxShots shots (a dense sweep leaves no depth between two shots).
+  function rangePositions(peaks) {
+    const lo = Math.max(1, Math.min(...peaks) - STACK.margin), hi = Math.min(1023, Math.max(...peaks) + STACK.margin);
+    const step = Math.max(STACK.step, Math.ceil((hi - lo) / (STACK.maxShots - 1)));
+    const out = [];
+    for (let v = lo; v < hi; v += step) out.push(v);
+    out.push(hi);
+    return out;
   }
 
   // Each region's sharpest focus value.
@@ -1073,7 +1093,7 @@ document.documentElement.lang = 'en';
     $('captureBtn').disabled = $('stackRangeBtn').disabled = true;
     try {
       const peaks = await regionPeaks(h, centre);
-      stackShots = stackPositions(peaks);
+      stackShots = rangePositions(peaks);
       const mid = stackShots[stackShots.length >> 1];
       await helper(`?value=${mid}`); $('focus').value = mid; $('focusOut').textContent = mid;
       $('focusNote').textContent = `Sharpest focus per region (top row first): ${peaks.join(', ')}. ` +
@@ -1090,42 +1110,45 @@ document.documentElement.lang = 'en';
   async function stackCapture() {
     const h = await helper(); if (!h) return null;
     const centre = h.auto ? h.value : +$('focus').value, W = video.videoWidth, H = video.videoHeight;
-    const radius = Math.max(2, Math.round(W / 600));
     const shots = stackShots || await findStackRange();
     if (!shots) return null;
+    // each shot is stored as a JPEG at once (16 full frames would not fit in memory as pixels)
     const frames = [];
     for (const v of shots) {
       if (!stream) break;
       $('captureBtn').textContent = `Shooting ${frames.length + 1} of ${shots.length} (focus ${v})…`;
       await helper(`?value=${v}`);
       await sleep(STACK.settle);
+      for (let k = 0; k < STACK.drain; k++) await nextFrame(); // frames still in the pipeline from before the move
       const a = (await nextFrame(), grabCanvas()), b = (await nextFrame(), grabCanvas());
-      frames.push(a.score >= b.score ? a.canvas : b.canvas);
+      const best = a.score >= b.score ? a.canvas : b.canvas;
+      frames.push({ focus: v, blob: new Promise(r => best.toBlob(r, 'image/jpeg', 0.95)) });
     }
     $('captureBtn').textContent = 'Aligning and merging…';
-    for (const c of frames) {
-      const rgba = c.getContext('2d').getImageData(0, 0, W, H).data;
-      await call({ type: 'stackAdd', rgba: rgba.buffer, width: W, height: H, radius }, [rgba.buffer]);
-    }
+    for (const f of frames) await call({ type: 'stackAdd', blob: await f.blob, focus: f.focus });
     await helper(`?value=${centre}`);
     $('focus').value = centre; $('focusOut').textContent = centre;
     $('captureBtn').textContent = 'Merging…';
     // the middle shot is the reference the others are aligned to (focus breathing changes the magnification)
     const r = await call({ type: 'stackEnd', ref: frames.length >> 1 });
     if (r.shifts && r.shifts.length > 1)
-      $('focusNote').textContent += ` Aligned to shot ${(frames.length >> 1) + 1}: ` +
-        r.shifts.map((a, i) => `shot ${i + 1} ×${a.scale.toFixed(4)}${a.dx || a.dy ? ` (${a.dx}, ${a.dy} px)` : ''}`).join(', ') + '.';
+      $('focusNote').textContent = `Stacked ${r.frames} shots (focus ${shots[0]}–${shots[shots.length - 1]}), aligned to shot ${(frames.length >> 1) + 1}: ` +
+        r.shifts.map((a, i) => `×${a.scale.toFixed(4)}${a.fixed ? '*' : ''}`).join(', ') +
+        `. ${Math.round(r.detail * 100)}% of the picture has detail; the rest is from shot ${r.background + 1}.` +
+        (r.shifts.some(a => a.fixed) ? ' * scale taken from the fit (that shot was too blurry to align).' : '');
     const c = document.createElement('canvas'); c.width = r.width; c.height = r.height;
     c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(r.rgba), r.width, r.height), 0, 0);
     return c;
   }
 
   // Every capture asks for a sample ID (suggesting the next one: A3 -> A4), which starts the photo's file name.
+  let retakeOf = null; // the photo a Retake will replace
   function askSampleId() {
     let last = '';
     try { last = localStorage.getItem('oriusSampleId') || ''; } catch {}
     const m = last.match(/^(.*?)(\d+)$/);
-    const next = m ? m[1] + String(+m[2] + 1).padStart(m[2].length, '0') : last;
+    const old = retakeOf && retakeOf.name.match(/^(.+?)_orius_/);
+    const next = old ? old[1] : m ? m[1] + String(+m[2] + 1).padStart(m[2].length, '0') : last;
     const raw = prompt('Sample ID for this photo (letters and numbers, e.g. A3):', next);
     if (raw === null) return null;
     const id = raw.trim().replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
@@ -1134,6 +1157,7 @@ document.documentElement.lang = 'en';
     return id;
   }
 
+  function finishRetake() { const old = retakeOf; retakeOf = null; if (old && photos.includes(old)) removePhoto(old); }
   $('captureBtn').onclick = async () => {
     if (!video.videoWidth || capturing) return;
     const sampleId = askSampleId();
@@ -1147,7 +1171,7 @@ document.documentElement.lang = 'en';
       const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.95));
       const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
       stopCamera();
-      addPhoto(blob, `${sampleId}_orius_${stamp}_stack.jpg`);
+      finishRetake(); addPhoto(blob, `${sampleId}_orius_${stamp}_stack.jpg`);
       return;
     }
     // 3 s of frames; the sharpest 3 are averaged (or the sharpest one is kept)
@@ -1164,7 +1188,7 @@ document.documentElement.lang = 'en';
     const blob = await new Promise(r => best.toBlob(r, 'image/jpeg', 0.95));
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
     stopCamera();
-    addPhoto(blob, `${sampleId}_orius_${stamp}.jpg`);
+    finishRetake(); addPhoto(blob, `${sampleId}_orius_${stamp}.jpg`);
   };
 
   // ---------- focus: the camera's autofocus lands differently on every shot ----------
