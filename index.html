@@ -413,14 +413,14 @@ document.documentElement.lang = 'en';
 
   // Dots on the counted insects; while correcting also struck-out, hand-added and dropped candidates.
   // r is the insect's radius on screen; the dot is a third of it.
-  function strokeMarks(ctx, ph, at, r, width, dpr, clip) {
+  function strokeMarks(ctx, ph, at, r, width, dpr, clip, dot) {
     const kept = ph.fix.kept || ph.points;
     const layers = [[kept.filter(c => !c[4]), '#22e57f', 'dot'], [kept.filter(c => c[4]), NYMPH_COLOR, 'dot']];
     if (fixing && ph.cands) {
       layers.unshift([ph.cands.filter(c => c[3] && !ph.fix.restored.includes(c)), 'rgba(220,228,222,.9)', 'hollow']);
       layers.push([ph.fix.struck, '#ff4d4d', 'dot'], [ph.fix.added, '#3db8ff', 'dot']);
     } else if (ph.fix.added.length) layers.push([ph.fix.added, '#22e57f', 'dot']);
-    const rd = Math.max(2.2 * dpr, r / 3);
+    const rd = dot || Math.max(2.2 * dpr, r / 3);
     for (const [pts, color, kind] of layers) {
       ctx.beginPath();
       for (const p of pts) {
@@ -562,18 +562,22 @@ document.documentElement.lang = 'en';
     ctx.drawImage(src, sx, sy, sw, sh, 0, 0, mag.width, mag.height);
     if (!liveMode && $('showMarks').checked && ph.dish && ph.points) {
       const s = ph.origW / ph.prepW;
-      strokeMarks(ctx, ph, (x, y) => [(x * s - sx) * scale, (y * s - sy) * scale], Math.max(4 * dpr, 9 * (ph.dish[2] / REF_R) * s * scale), 2 * dpr, dpr, [mag.width, mag.height]);
+      // small fixed-size dots, so the insect under each stays visible
+      strokeMarks(ctx, ph, (x, y) => [(x * s - sx) * scale, (y * s - sy) * scale], Math.max(4 * dpr, 9 * (ph.dish[2] / REF_R) * s * scale), 2 * dpr, dpr, [mag.width, mag.height], 1.8 * dpr);
     }
-    let pts = [], rPhoto = 0;
-    if (liveMode && $('liveToggle').checked) { pts = livePoints.map(([x, y]) => [x * W, y * H]); rPhoto = 6 / shown; }
-    const r = Math.max(2.2 * dpr, rPhoto * scale / 3);
-    ctx.beginPath();
-    for (const [x, y] of pts) {
-      const X = (x - sx) * scale, Y = (y - sy) * scale;
-      if (X < -r || Y < -r || X > mag.width + r || Y > mag.height + r) continue;
-      ctx.moveTo(X + r, Y); ctx.arc(X, Y, r, 0, Math.PI * 2);
+    let pts = [];
+    if (liveMode && $('liveToggle').checked) pts = livePoints.map(([x, y, n]) => [x * W, y * H, n]);
+    const r = 1.8 * dpr;
+    for (const [nymph, color] of [[0, '#22e57f'], [1, NYMPH_COLOR]]) {
+      ctx.beginPath();
+      for (const [x, y, n] of pts) {
+        if (!n !== !nymph) continue;
+        const X = (x - sx) * scale, Y = (y - sy) * scale;
+        if (X < -r || Y < -r || X > mag.width + r || Y > mag.height + r) continue;
+        ctx.moveTo(X + r, Y); ctx.arc(X, Y, r, 0, Math.PI * 2);
+      }
+      ctx.fillStyle = color; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.75)'; ctx.lineWidth = dpr; ctx.stroke();
     }
-    ctx.fillStyle = '#22e57f'; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.75)'; ctx.lineWidth = dpr; ctx.stroke();
     const cx = mag.width / 2, cy = mag.height / 2, m = 9 * dpr;
     ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = dpr; ctx.beginPath();
     ctx.moveTo(cx - m, cy); ctx.lineTo(cx + m, cy); ctx.moveTo(cx, cy - m); ctx.lineTo(cx, cy + m); ctx.stroke();
