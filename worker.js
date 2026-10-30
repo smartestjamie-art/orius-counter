@@ -4,8 +4,10 @@ importScripts('debris_model.js', 'orius.js');
 
 const cache = new Map();
 
-// Focus stacking: each added frame replaces the pixels where it is sharper than every frame so far. Sharpness is
-// |Laplacian| of the luma summed over a (2 r + 1)^2 window, so whole insects come from one frame rather than speckle.
+// Focus stacking: frames are blended with weight (sharpness + floor)^power per pixel, sharpness being |Laplacian| of
+// the luma summed over a (2 r + 1)^2 window. In-focus detail comes almost wholly from the sharpest frame; flat
+// background, where no frame is sharp, is averaged, so it neither flips between frames nor shows seams.
+const STACK_BLEND = { power: 4, floor: 0.5 }; // floor: fraction of the first frame's median window sharpness
 let stack = null;
 function stackScore(rgba, w, h, r) {
   const g = new Float32Array(w * h), lap = new Float32Array(w * h);
@@ -57,21 +59,29 @@ onmessage = e => {
       const r = Orius.count(prep, { gray: m.gray, core: m.core, nymphs: m.nymphs });
       postMessage({ seq: m.seq, count: r.count, points: r.detections.map(d => [d.x / prep.width, d.y / prep.height, d.kind === 'nymph' ? 1 : 0]) });
     } else if (m.type === 'stackAdd') {
-      const rgba = new Uint8ClampedArray(m.rgba), score = stackScore(rgba, m.width, m.height, m.radius);
+      const rgba = new Uint8ClampedArray(m.rgba), score = stackScore(rgba, m.width, m.height, m.radius), n = m.width * m.height;
       if (!stack || stack.width !== m.width || stack.height !== m.height) {
-        stack = { width: m.width, height: m.height, rgba, best: score, frames: 1 };
-      } else {
-        for (let i = 0; i < score.length; i++) if (score[i] > stack.best[i]) {
-          stack.best[i] = score[i]; const j = 4 * i;
-          stack.rgba[j] = rgba[j]; stack.rgba[j + 1] = rgba[j + 1]; stack.rgba[j + 2] = rgba[j + 2];
-        }
-        stack.frames++;
+        const sample = []; for (let i = 0; i < n; i += 97) sample.push(score[i]);
+        sample.sort((a, b) => a - b);
+        stack = { width: m.width, height: m.height, sum: new Float32Array(3 * n), weight: new Float32Array(n),
+          floor: Math.max(1e-6, STACK_BLEND.floor * sample[sample.length >> 1]), frames: 0 };
       }
-      postMessage({ seq: m.seq, frames: stack.frames });
+      const st = stack;
+      for (let i = 0, j = 0; i < n; i++, j += 4) {
+        const w = Math.pow(score[i] / st.floor + 1, STACK_BLEND.power);
+        st.weight[i] += w; st.sum[3 * i] += w * rgba[j]; st.sum[3 * i + 1] += w * rgba[j + 1]; st.sum[3 * i + 2] += w * rgba[j + 2];
+      }
+      st.frames++;
+      postMessage({ seq: m.seq, frames: st.frames });
     } else if (m.type === 'stackEnd') {
       const st = stack; stack = null;
       if (!st) { postMessage({ seq: m.seq, error: 'nothing stacked' }); return; }
-      postMessage({ seq: m.seq, rgba: st.rgba.buffer, width: st.width, height: st.height, frames: st.frames }, [st.rgba.buffer]);
+      const n = st.width * st.height, out = new Uint8ClampedArray(4 * n);
+      for (let i = 0, j = 0; i < n; i++, j += 4) {
+        const w = st.weight[i];
+        out[j] = st.sum[3 * i] / w; out[j + 1] = st.sum[3 * i + 1] / w; out[j + 2] = st.sum[3 * i + 2] / w; out[j + 3] = 255;
+      }
+      postMessage({ seq: m.seq, rgba: out.buffer, width: st.width, height: st.height, frames: st.frames }, [out.buffer]);
     } else if (m.type === 'version') {
       postMessage({ seq: m.seq, version: Orius.VERSION });
     } else if (m.type === 'drop') {

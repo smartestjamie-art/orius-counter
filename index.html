@@ -182,7 +182,10 @@
           <button class="small" id="focusSweepBtn">Find sharpest focus</button>
           <button class="small" id="focusAutoBtn">Autofocus</button>
         </div>
-        <label class="check" id="stackRow" hidden><input type="checkbox" id="stackToggle"> Focus stack: find each region's sharpest focus, shoot each, merge</label>
+        <div id="stackRow" hidden>
+          <label class="check"><input type="checkbox" id="stackToggle"> Focus stack: shoot at each region's sharpest focus, merge</label>
+          <div class="row"><button class="small" id="stackRangeBtn">Find stack range</button></div>
+        </div>
         <label class="check"><input type="checkbox" id="avgToggle" checked> Average 3 frames per shot (less noise; keep the dish still)</label>
         <details id="camSettings" hidden>
           <summary>Exposure, gain, sharpening</summary>
@@ -631,7 +634,11 @@ document.documentElement.lang = 'en';
     const r = view.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
     return { x: ((e.clientX - r.left) * dpr - viewT.ox) / viewT.k, y: ((e.clientY - r.top) * dpr - viewT.oy) / viewT.k };
   }
-  $('stage').addEventListener('pointermove', e => { const p = stagePoint(e); if (p) { magAt = p; drawMag(); } });
+  // The magnifier follows the pointer until a click on the photo pins it there; clicking the magnifier lets go.
+  let magPinned = false;
+  $('stage').addEventListener('pointermove', e => { if (magPinned) return; const p = stagePoint(e); if (p) { magAt = p; drawMag(); } });
+  view.addEventListener('click', e => { if (!selected || !selected.bmp) return; const p = stagePoint(e); if (p) { magAt = p; magPinned = true; drawMag(); } }, true);
+  mag.addEventListener('click', () => { magPinned = false; drawMag(); });
   $('magZoom').oninput = () => { $('magOut').textContent = $('magZoom').value + '×'; drawMag(); };
 
   function drawMag() {
@@ -671,7 +678,8 @@ document.documentElement.lang = 'en';
     const cx = mag.width / 2, cy = mag.height / 2, m = 9 * dpr;
     ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = dpr; ctx.beginPath();
     ctx.moveTo(cx - m, cy); ctx.lineTo(cx + m, cy); ctx.moveTo(cx, cy - m); ctx.lineTo(cx, cy + m); ctx.stroke();
-    $('magNote').textContent = magAt ? `x ${Math.round(at.x)}, y ${Math.round(at.y)} · ${$('magZoom').value}× the stage view`
+    $('magNote').textContent = magAt ? `x ${Math.round(at.x)}, y ${Math.round(at.y)} · ${$('magZoom').value}× the stage view` +
+      (magPinned ? ' · pinned: click the magnifier to follow the pointer again' : ' · click the photo to pin')
       : 'Move the pointer over the photo to inspect the dots.';
   }
 
@@ -989,7 +997,8 @@ document.documentElement.lang = 'en';
   // Focus stack from per-region autofocus: sweep the focus (coarse around the current value, then fine across
   // where the regions peaked), take each of the 3 x 3 regions' sharpest focus, shoot once per distinct value and
   // merge (the worker keeps the sharpest version of every area).
-  const STACK = { grid: 3, coarse: 32, reach: 192, fine: 4, margin: 24, merge: 8, maxShots: 6, sweepSettle: 350, settle: 450 };
+  const STACK = { grid: 3, coarse: 32, reach: 192, fine: 8, margin: 16, merge: 8, maxShots: 6, sweepSettle: 300, settle: 300 };
+  let stackShots = null; // focus values found by "Find stack range", reused by every stacked capture
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   // Mean |Laplacian| of the luma in each cell of a grid x grid split of the frame's middle 80 %, row by row.
@@ -1043,7 +1052,7 @@ document.documentElement.lang = 'en';
     }
     const flo = Math.max(h.min, Math.min(...at) - STACK.margin), fhi = Math.min(h.max, Math.max(...at) + STACK.margin);
     best.fill(-1);
-    const step = fhi - flo > 160 ? 2 * STACK.fine : STACK.fine; // keep the fine pass under ~30 positions
+    const step = fhi - flo > 160 ? 2 * STACK.fine : STACK.fine; // keep the fine pass under ~20 positions
     for (let v = flo; v <= fhi && stream; v += step) {
       $('captureBtn').textContent = `Fine focus per region… ${v} (${flo}–${fhi})`;
       await measure(v);
@@ -1051,21 +1060,46 @@ document.documentElement.lang = 'en';
     return at;
   }
 
+  // Sweep once and remember the shots; the camera ends at the middle shot so the preview looks right.
+  async function findStackRange() {
+    const h = await helper(); if (!h || !stream) return null;
+    const centre = h.auto ? h.value : +$('focus').value;
+    const label = $('captureBtn').textContent;
+    $('captureBtn').disabled = $('stackRangeBtn').disabled = true;
+    try {
+      const peaks = await regionPeaks(h, centre);
+      stackShots = stackPositions(peaks);
+      const mid = stackShots[stackShots.length >> 1];
+      await helper(`?value=${mid}`); $('focus').value = mid; $('focusOut').textContent = mid;
+      $('focusNote').textContent = `Sharpest focus per region (top row first): ${peaks.join(', ')}. ` +
+        (stackShots.length === 1 ? `All sharp at ${stackShots[0]}: stacking takes one shot.` : `Stack range ${stackShots[0]}–${stackShots[stackShots.length - 1]}: shots at ${stackShots.join(', ')}.`);
+    } finally {
+      $('captureBtn').textContent = label; $('captureBtn').disabled = $('stackRangeBtn').disabled = false;
+    }
+    return stackShots;
+  }
+  $('stackRangeBtn').onclick = () => { if (!capturing) findStackRange(); };
+
+  // Shoot every stack position back to back (the sharper of two frames each, nothing else in between), so the
+  // insects have little time to move, then merge.
   async function stackCapture() {
     const h = await helper(); if (!h) return null;
     const centre = h.auto ? h.value : +$('focus').value, W = video.videoWidth, H = video.videoHeight;
     const radius = Math.max(2, Math.round(W / 600));
-    const peaks = await regionPeaks(h, centre), shots = stackPositions(peaks);
-    $('focusNote').textContent = `Sharpest focus per region (top row first): ${peaks.join(', ')}. ` +
-      (shots.length === 1 ? `All at one focus (${shots[0]}): one shot.` : `Shooting at ${shots.join(', ')} and merging.`);
-    let n = 0;
+    const shots = stackShots || await findStackRange();
+    if (!shots) return null;
+    const frames = [];
     for (const v of shots) {
       if (!stream) break;
+      $('captureBtn').textContent = `Shooting ${frames.length + 1} of ${shots.length} (focus ${v})…`;
       await helper(`?value=${v}`);
       await sleep(STACK.settle);
-      const best = await bestFrames(4, 3);
-      const rgba = best.getContext('2d').getImageData(0, 0, W, H).data;
-      $('captureBtn').textContent = `Focus stack… shot ${++n} of ${shots.length} (focus ${v})`;
+      const a = (await nextFrame(), grabCanvas()), b = (await nextFrame(), grabCanvas());
+      frames.push(a.score >= b.score ? a.canvas : b.canvas);
+    }
+    $('captureBtn').textContent = 'Merging…';
+    for (const c of frames) {
+      const rgba = c.getContext('2d').getImageData(0, 0, W, H).data;
       await call({ type: 'stackAdd', rgba: rgba.buffer, width: W, height: H, radius }, [rgba.buffer]);
     }
     await helper(`?value=${centre}`);
