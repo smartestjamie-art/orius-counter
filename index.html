@@ -38,8 +38,8 @@
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
   body { background: var(--bg); color: var(--ink); font: 15px/1.45 var(--font-body); }
-  .wrap { max-width: 1320px; margin: 0 auto; padding-block: 18px 40px;
-    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  .wrap { margin: 0 auto; padding-block: 18px 40px;
+    padding-left: max(clamp(16px, 2vw, 32px), env(safe-area-inset-left, 0px)); padding-right: max(clamp(16px, 2vw, 32px), env(safe-area-inset-right, 0px));
     display: flex; flex-direction: column; gap: 16px; }
   header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
   header h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; text-wrap: balance; }
@@ -57,18 +57,27 @@
   .key { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; color: var(--muted); margin: 8px 0; }
   .key i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 1px solid #000; margin-right: 5px; vertical-align: 0; }
   .key span:last-child i { border: 2px solid; width: 8px; height: 8px; }
-  .grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; grid-template-rows: auto 1fr;
+  /* The photo takes the room left by the side panels; from 1600 px the panels form two columns. */
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 24vw, 400px); grid-template-rows: auto 1fr;
     grid-template-areas: "photo side" "list side"; gap: 16px; align-items: start; }
   .photo-area { grid-area: photo; min-width: 0; }
   .grid > aside { grid-area: side; }
   .photos-panel { grid-area: list; }
   @media (max-width: 1000px) { .grid { grid-template-columns: minmax(0, 1fr) 260px; } }
+  @media (min-width: 1600px) {
+    .grid { grid-template-columns: minmax(0, 1fr) clamp(620px, 36vw, 820px); }
+    .grid > aside { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
+    .grid > aside > .panel:first-child { grid-column: 1 / -1; }
+  }
   @media (max-width: 700px) {
     .grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; grid-template-areas: "photo" "side" "list"; }
   }
 
+  /* As wide as the column allows, but never taller than the window. */
   .stage { position: relative; background: var(--stage); border-radius: 10px; overflow: hidden; aspect-ratio: 4 / 3;
-    max-width: 100%; touch-action: manipulation; }
+    width: min(100%, calc((100dvh - 90px) * 4 / 3)); margin-inline: auto; touch-action: manipulation; }
+  .stage:fullscreen { width: 100vw; height: 100vh; aspect-ratio: auto; border-radius: 0; }
+  .stage .fullBtn { position: absolute; right: 10px; top: 10px; z-index: 2; padding: 6px 10px; font-size: 13px; opacity: .85; }
   .stage canvas, .stage video { position: absolute; inset: 0; width: 100%; height: 100%; }
   .stage video { object-fit: contain; }
   .stage.drag { outline: 3px dashed var(--accent); outline-offset: -6px; }
@@ -78,7 +87,7 @@
     background: rgba(0, 0, 0, .65); color: #fff; font: 13px var(--font-mono); }
   .stage .tag { position: absolute; left: 12px; top: 12px; padding: 4px 8px; border-radius: 6px; background: var(--amber);
     color: #fff; font: 600 12px var(--font-body); letter-spacing: .03em; }
-  .mag { display: block; width: 100%; aspect-ratio: 1; max-width: min(100%, 300px); margin-inline: auto; border-radius: 8px; background: var(--stage); cursor: crosshair; }
+  .mag { display: block; width: 100%; aspect-ratio: 1; max-width: min(100%, 380px); margin-inline: auto; border-radius: 8px; background: var(--stage); cursor: crosshair; }
   .hint { color: var(--muted); font-size: 13px; margin: 6px 2px 0; }
 
   aside { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
@@ -132,6 +141,7 @@
         <div class="empty" id="empty" hidden>Drop dish photos here, or press <b>&nbsp;Add photos…</b></div>
         <span class="tag" id="exampleTag" hidden>EXAMPLE PHOTO</span>
         <div class="busy" id="busy" hidden></div>
+        <button class="fullBtn" id="fullBtn" title="Show the photo full screen (Esc to leave)">Full screen</button>
       </div>
       <p class="hint" id="stageHint">Click the photo to zoom in 3×, click again to zoom out. Drop photos anywhere on it to add them.</p>
     </section>
@@ -587,6 +597,15 @@ document.documentElement.lang = 'en';
   }
 
   window.addEventListener('resize', () => { draw(); drawLive(); });
+  $('fullBtn').onclick = e => {
+    e.stopPropagation();
+    if (document.fullscreenElement) document.exitFullscreen(); else stage.requestFullscreen().catch(() => {});
+  };
+  document.addEventListener('fullscreenchange', () => {
+    $('fullBtn').textContent = document.fullscreenElement ? 'Exit full screen' : 'Full screen';
+    requestAnimationFrame(() => { draw(); drawLive(); });
+  });
+  if (!document.fullscreenEnabled) $('fullBtn').hidden = true;
   $('showMarks').onchange = draw;
   $('showDish').onchange = draw;
 
