@@ -9,7 +9,7 @@
 
   // Counter version, stored with every result so a photo keeps the count it was given. Change it whenever
   // detection, splitting or the debris model (debris_model.js) changes.
-  const VERSION = '2026-10-30e';
+  const VERSION = '2026-10-30f';
   const REFERENCE_RADIUS = 699; // outer dish rim in the notebook's photo
   const DEFAULTS = { background_sigma: 12, gray_threshold: 75, contrast_threshold: 32, component_min_area: 55,
     core_threshold: 50, core_min_pixels: 25 };
@@ -23,7 +23,7 @@
   // Long thin blobs (sticks, also curved) on front-lit photos (photobooth_count.STICK).
   const STICK = { min_length: 60, max_width: 8.3 };
   // Nymphs, counted on request: warm blobs that are not black adults (photobooth_count.NYMPH).
-  const NYMPH = { level: 215, sigma: 1.2, max_blue: 140, min_tan: 35, local: { sigma: 10, min_tan: 30, min_hue: 0.5, max_blue: 160, min_area: 20, max_sat: 0.9, wall: true },
+  const NYMPH = { level: 215, sigma: 1.2, max_blue: 140, min_tan: 35, local: { sigma: 10, min_tan: 30, min_hue: 0.5, max_blue: 160, min_area: 15, max_sat: 0.9, clump: 1.1, wall: true },
     wall: { sectors: 120, step: 4, outer: 0.75, coverage: 0.33, run: 3, filled: 6 }, min_red: 60, max_sat: 0.75, neutral: 15, gap: 2, max_overlap: 0.4,
     inside: 0.95, clump: 1.3, max_clump: 6, tan: { hue: [0.38, 0.8], min_red: 140, min_area: 40 }, brown: { hue: 0.05, max_red: 140, min_area: 55 } };
 
@@ -898,7 +898,7 @@
     }
     // one nymph's area: the median of the blobs of at least tan.min_area, so faint specks don't shrink it
     const big = blobs.filter(b => b.a >= T.min_area * s * s).map(b => b.a);
-    const single = N.clump * medianOf(big.length ? big : blobs.map(b => b.a)), found = [];
+    const single = (backlit ? N.clump : N.local.clump) * medianOf(big.length ? big : blobs.map(b => b.a)), found = [];
     for (const b of blobs) {
       const k = Math.max(1, pyRound(b.a / single)), d = Math.max(b.a - 1, 1);
       if (k > N.max_clump) continue; // food or egg-mass patch
