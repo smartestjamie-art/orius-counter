@@ -15,8 +15,8 @@
     seed_sigma: 1.0, seed_depth: 3 };
   const DEBRIS = { min_length: 70, min_solidity: 0.75, min_brownness: 0.35 };
   // Backlit dishes: the dark dish-wall ring is cut out of the mask (photobooth_count.BACKLIT).
-  const BACKLIT = { sectors: 120, search: [0.95, 1.03], min_dip: 50, min_ring_sectors: 0.5, half_width: 4, keep_dark: 50,
-    near: 6, open_radius: 2, seed_depth: 4 };
+  const BACKLIT = { sectors: 120, search: [0.95, 1.03], lip_scan: [0.80, 0.94, 0.02], lip_min_sectors: 80, wall_ratio: 0.983, min_dip: 50, min_ring_sectors: 0.5, half_width: 4, keep_dark: 50,
+    near: 6, open_radius: 2, split: { seed_depth: 5, peak_min_distance: 10, segment_min_area: 60 } };
 
   // Python's round(): halves go to the even neighbour.
   function pyRound(x) {
@@ -349,19 +349,18 @@
     return v.length % 2 ? v[k] : (v[k - 1] + v[k]) / 2;
   }
 
-  /** Mask of the dark dish-wall ring, or null when the photo is not backlit. */
-  function wallRing(gray, w, h, cx, cy, r) {
+  // Darkest radius per angular sector between search[0]*r and search[1]*r, and whether the sector shows a
+  // dark ring there (photobooth_count.wall_line).
+  function wallLine(gray, w, h, cx, cy, r, search) {
     const B = BACKLIT, n = B.sectors;
-    const lo = Math.ceil(B.search[0] * r), hi = Math.floor(B.search[1] * r), K = hi - lo + 1;
+    const lo = Math.ceil(search[0] * r), hi = Math.floor(search[1] * r), K = hi - lo + 1;
     const y0 = Math.max(0, cy - hi - 1), y1 = Math.min(h, cy + hi + 2), x0 = Math.max(0, cx - hi - 1), x1 = Math.min(w, cx + hi + 2);
     const buckets = Array.from({ length: n * K }, () => []);
-    const sectorOf = (x, y) => Math.min(Math.floor((Math.atan2(y - cy, x - cx) + Math.PI) / (2 * Math.PI) * n), n - 1);
     for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
       const k = Math.floor(Math.sqrt((x - cx) ** 2 + (y - cy) ** 2) + 0.5);
-      if (k >= lo && k <= hi) buckets[sectorOf(x, y) * K + k - lo].push(gray[y * w + x]);
+      if (k >= lo && k <= hi) buckets[sectorOf(x, y, cx, cy) * K + k - lo].push(gray[y * w + x]);
     }
     const line = new Int32Array(n), dark = new Uint8Array(n);
-    let ringSectors = 0;
     for (let a = 0; a < n; a++) {
       const med = [];
       for (let k = 0; k < K; k++) { const b = buckets[a * K + k]; med.push(b.length ? medianOf(b) : 255); }
@@ -370,22 +369,79 @@
       for (let i = 1; i < K; i++) if (sm[i] < sm[best]) best = i;
       line[a] = lo + best;
       dark[a] = medianOf(sm.slice()) - sm[best] > B.min_dip ? 1 : 0;
-      ringSectors += dark[a];
     }
-    if (ringSectors < B.min_ring_sectors * n) return null;
-    const smooth = new Float64Array(n);
+    return { line, dark, box: [y0, y1, x0, x1] };
+  }
+
+  function sectorOf(x, y, cx, cy) {
+    const n = BACKLIT.sectors;
+    return Math.min(Math.floor((Math.atan2(y - cy, x - cx) + Math.PI) / (2 * Math.PI) * n), n - 1);
+  }
+
+  // Median of each ring sector's radius with its ring-showing neighbours (5 sectors).
+  function smoothLine(line, dark) {
+    const n = line.length, smooth = new Float64Array(n);
     for (let a = 0; a < n; a++) {
       if (!dark[a]) continue;
       const near = [];
       for (let k = -2; k <= 2; k++) { const b = (a + k + n) % n; if (dark[b]) near.push(line[b]); }
       smooth[a] = medianOf(near);
     }
+    return smooth;
+  }
+
+  const countOf = dark => dark.reduce((t, v) => t + v, 0);
+
+  /** Mask of the dark dish-wall ring, or null when the photo is not backlit. */
+  function wallRing(gray, w, h, cx, cy, r) {
+    const B = BACKLIT;
+    const { line, dark, box: [y0, y1, x0, x1] } = wallLine(gray, w, h, cx, cy, r, B.search);
+    if (countOf(dark) < B.min_ring_sectors * B.sectors) return null;
+    const smooth = smoothLine(line, dark);
     const ring = new Uint8Array(w * h);
     for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
-      const a = sectorOf(x, y);
+      const a = sectorOf(x, y, cx, cy);
       if (dark[a] && Math.abs(Math.sqrt((x - cx) ** 2 + (y - cy) ** 2) - smooth[a]) <= B.half_width) ring[y * w + x] = 1;
     }
     return ring;
+  }
+
+  /** Circle [cx, cy, r] through the dark dish wall (photobooth_count.wall_fit), or null. */
+  function wallFit(gray, w, h, cx, cy, r, scales) {
+    const B = BACKLIT, n = B.sectors;
+    let best = null;
+    for (const q of scales) {
+      const found = wallLine(gray, w, h, cx, cy, q * r, B.search);
+      if (!best || countOf(found.dark) > countOf(best.dark)) best = found;
+    }
+    if (countOf(best.dark) < B.lip_min_sectors) return null;
+    const smooth = smoothLine(best.line, best.dark);
+    // normal equations of x^2 + y^2 + D x + E y + F = 0, solved by Cramer's rule
+    const M = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], v = [0, 0, 0];
+    for (let a = 0; a < n; a++) {
+      if (!best.dark[a]) continue;
+      const t = (a + 0.5) / n * 2 * Math.PI - Math.PI, px = cx + smooth[a] * Math.cos(t), py = cy + smooth[a] * Math.sin(t);
+      const row = [px, py, 1], rhs = -(px * px + py * py);
+      for (let i = 0; i < 3; i++) { v[i] += row[i] * rhs; for (let j = 0; j < 3; j++) M[i][j] += row[i] * row[j]; }
+    }
+    const det3 = m => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    const d = det3(M), sol = [0, 1, 2].map(c => det3(M.map((row, i) => row.map((x, j) => (j === c ? v[i] : x)))) / d);
+    const fx = -sol[0] / 2, fy = -sol[1] / 2;
+    return [fx, fy, Math.sqrt(fx * fx + fy * fy - sol[2])];
+  }
+
+  /** A backlit dish's circle rebuilt from its dark wall, or null for front-lit photos (photobooth_count.wall_dish). */
+  function wallDish(gray, w, h, cx, cy, r) {
+    const B = BACKLIT;
+    let scales = [1.0];
+    if (!wallRing(gray, w, h, cx, cy, r)) {
+      const [start, stop, step] = B.lip_scan;
+      scales = Array.from({ length: Math.ceil((stop - start) / step) }, (_, i) => start + i * step);
+    }
+    let fit = wallFit(gray, w, h, cx, cy, r, scales);
+    if (!fit) return null;
+    for (let i = 0; i < 2; i++) fit = wallFit(gray, w, h, pyRound(fit[0]), pyRound(fit[1]), fit[2] / B.wall_ratio, [1.0]) || fit;
+    return [fit[0], fit[1], fit[2] / B.wall_ratio];
   }
 
   // Binary erosion / dilation with a symmetric structuring element given as offsets; outside counts as 0.
@@ -604,8 +660,8 @@
     return total / model.trees.length;
   }
 
-  function resplit(det, gray, W, s, rgb, model, seedDepth) {
-    const p = det.parameters, labels = det.labels;
+  function resplit(det, gray, W, s, rgb, model, split) {
+    const SPLIT = split, p = det.parameters, labels = det.labels;
     const splitMin = SPLIT.split_min_area * s * s, segmentMin = SPLIT.segment_min_area * s * s;
     const detections = [];
     for (const c of det.components) {
@@ -630,7 +686,7 @@
         const smooth = gaussianFilter(g, w, h, SPLIT.seed_sigma * s);
         const inv = new Float64Array(n);
         for (let i = 0; i < n; i++) inv[i] = m[i] ? 255 - smooth[i] : 0;
-        const hm = hMaxima(inv, w, h, seedDepth);
+        const hm = hMaxima(inv, w, h, SPLIT.seed_depth);
         for (let i = 0; i < n; i++) hm[i] = hm[i] && m[i];
         const seeds = label4(hm, w, h);
         if (seeds.n) candidates.push({ surface: smooth, markers: seeds.labels, count: seeds.n });
@@ -725,16 +781,23 @@
 
   /** Find the dish and bring the photo to the notebook's scale. rgb: Uint8Array, 3 bytes per pixel. */
   function prepare(rgb, W, H, dish) {
-    let [cx, cy, r] = dish || findDish(luma(rgb, W * H), W, H);
-    let w = W, h = H, img = rgb;
-    if (r > 1.25 * REFERENCE_RADIUS) {
-      const k = REFERENCE_RADIUS / r;
-      w = pyRound(W * k); h = pyRound(H * k);
-      img = resizeRGB(rgb, W, H, w, h);
-      cx = pyRound(cx * k); cy = pyRound(cy * k); r = REFERENCE_RADIUS;
+    const scaleTo = (cx, cy, r) => {
+      if (r <= 1.25 * REFERENCE_RADIUS) return { img: rgb, w: W, h: H, dish: [cx, cy, r], k: 1 };
+      const k = REFERENCE_RADIUS / r, w = pyRound(W * k), h = pyRound(H * k);
+      return { img: resizeRGB(rgb, W, H, w, h), w, h, dish: [pyRound(cx * k), pyRound(cy * k), REFERENCE_RADIUS], k };
+    };
+    let p = scaleTo(...(dish || findDish(luma(rgb, W * H), W, H)));
+    if (!dish) {
+      // Backlit dishes: take the dish from the dark wall ring rather than the circle found above, which
+      // sometimes lands on the outer lip.
+      const [cx, cy, r] = p.dish, red = new Float64Array(p.w * p.h);
+      for (let i = 0, j = 0; i < red.length; i++, j += 3) red[i] = p.img[j];
+      const wall = wallDish(red, p.w, p.h, cx, cy, r);
+      if (wall) p = scaleTo(...wall.map(v => pyRound(v / p.k)));
     }
-    return { rgb: img, width: w, height: h, originalWidth: W, originalHeight: H, dish: [cx, cy, r] };
+    return { rgb: p.img, width: p.w, height: p.h, originalWidth: W, originalHeight: H, dish: p.dish };
   }
+
 
   /** Count insects in a prepared photo. Thresholds default to the notebook's 75 / 50. */
   function count(prep, opts) {
@@ -753,9 +816,10 @@
     const model = opts.classifier === false ? null
       : opts.model || (typeof ORIUS_DEBRIS_MODEL !== 'undefined' ? ORIUS_DEBRIS_MODEL : null);
     // candidates: every split segment, with why it was dropped (straw rule first, then the classifier) or null
-    const candidates = resplit(det, red, w, s, prep.rgb, model, ring ? BACKLIT.seed_depth : SPLIT.seed_depth);
+    const candidates = resplit(det, red, w, s, prep.rgb, model, ring ? { ...SPLIT, ...BACKLIT.split } : SPLIT);
     const debris = debrisBlobs(det, prep.rgb, w, s, ring ? -Infinity : DEBRIS.min_brownness);
-    for (const d of candidates) d.dropped = debris.has(d.blob) ? 'straw' : model && d.p_insect < model.threshold ? 'classifier' : null;
+    // The classifier only runs on front-lit photos: on backlit ones it removed as many insects as false hits.
+    for (const d of candidates) d.dropped = debris.has(d.blob) ? 'straw' : model && !ring && d.p_insect < model.threshold ? 'classifier' : null;
     const detections = candidates.filter(d => !d.dropped);
     return { count: detections.length, detections, candidates, parameters: p, components: det.components.length, backlit: !!ring,
       debrisFragments: debris.size, debrisRemoved: candidates.filter(d => d.dropped === 'straw').length,
