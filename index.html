@@ -143,6 +143,30 @@
         <div class="row" style="margin-top:8px"><button class="small" id="recountBtn" hidden>Recount with the latest counter</button></div>
       </div>
 
+      <div class="panel" id="cameraPanel" hidden>
+        <h2>Camera</h2>
+        <div class="row">
+          <select id="camSelect" aria-label="Camera"></select>
+        </div>
+        <div class="row">
+          <button id="captureBtn" class="primary">Capture &amp; count</button>
+          <button id="stopCamBtn">Stop camera</button>
+        </div>
+        <div class="meta" id="focusMeta"></div>
+        <div class="slider" id="focusRow" hidden>
+          <label for="focus">Focus</label><output id="focusOut"></output>
+          <input type="range" id="focus">
+        </div>
+        <div class="row" id="focusBtns" hidden>
+          <button class="small" id="focusSweepBtn">Find sharpest focus</button>
+          <button class="small" id="focusAutoBtn">Autofocus</button>
+        </div>
+        <div class="row" id="focusConnect" hidden><button class="small" id="focusConnectBtn">Connect focus helper</button></div>
+        <p class="note" id="focusNote"></p>
+        <label class="check"><input type="checkbox" id="liveToggle" checked> Live count on the preview</label>
+        <div class="meta" id="liveMeta"></div>
+      </div>
+
       <div class="panel">
         <h2>Magnifier</h2>
         <canvas class="mag" id="mag" aria-label="Magnified view of the photo under the pointer"></canvas>
@@ -169,30 +193,6 @@
         </div>
       </div>
 
-      <div class="panel" id="cameraPanel" hidden>
-        <h2>Camera</h2>
-        <div class="row">
-          <select id="camSelect" aria-label="Camera"></select>
-        </div>
-        <label class="check"><input type="checkbox" id="liveToggle" checked> Live count on the preview</label>
-        <div class="meta" id="liveMeta"></div>
-        <div class="meta" id="focusMeta"></div>
-        <div class="slider" id="focusRow" hidden>
-          <label for="focus">Manual focus</label><output id="focusOut"></output>
-          <input type="range" id="focus">
-        </div>
-        <div class="row" id="focusBtns" hidden>
-          <button class="small" id="focusSweepBtn">Find sharpest focus</button>
-          <button class="small" id="focusAutoBtn">Autofocus</button>
-        </div>
-        <p class="note" id="focusNote"></p>
-        <div class="row" id="focusConnect" hidden><button class="small" id="focusConnectBtn">Connect focus helper</button></div>
-        <div class="row">
-          <button id="captureBtn" class="primary">Capture &amp; count</button>
-          <button id="stopCamBtn">Stop camera</button>
-        </div>
-      </div>
-
       <div class="panel">
         <h2>Thresholds</h2>
         <div class="slider">
@@ -208,7 +208,7 @@
           <button class="small" id="presetNotebook">Notebook 75 / 50</button>
         </div>
         <label class="check"><input type="checkbox" id="nymphToggle"> Also count nymphs (pale and red-brown, amber dots)</label>
-        <p class="note">Off: black adults only. Changes recount every photo in the list.</p>
+        <p class="note">Off: black adults only. The nymph setting applies to photos added from now on; Gray and Dark core recount every photo.</p>
       </div>
 
       <div class="panel">
@@ -359,7 +359,7 @@ document.documentElement.lang = 'en';
   async function countPhoto(ph) {
     await ensurePrepared(ph);
     ph.status = 'counting'; renderList(); setBusy(`Counting ${ph.name}…`);
-    const t = { ...thresholds };
+    const t = { ...thresholds, nymphs: ph.nymphs == null ? thresholds.nymphs : ph.nymphs }; // a photo keeps its nymph setting
     const r = await call({ type: 'count', id: ph.id, gray: t.gray, core: t.core, nymphs: t.nymphs });
     Object.assign(ph, { autoCount: r.count, points: r.points, cands: r.cands, feats: r.feats, featureNames: r.featureNames,
       debrisRemoved: r.debrisRemoved, backlit: r.backlit, version: r.version, ms: r.ms, gray: t.gray, core: t.core, nymphs: t.nymphs, status: 'done' });
@@ -374,7 +374,7 @@ document.documentElement.lang = 'en';
   function recountAll() {
     for (const ph of [selected, ...photos.filter(p => p !== selected)]) {
       if (!ph || !ph.dish) continue;
-      enqueue(async () => { if (ph.gray === thresholds.gray && ph.core === thresholds.core && !!ph.nymphs === thresholds.nymphs) return; try { await countPhoto(ph); } catch (err) { ph.status = 'error: ' + err.message; renderList(); } setBusy(''); });
+      enqueue(async () => { if (ph.gray === thresholds.gray && ph.core === thresholds.core) return; try { await countPhoto(ph); } catch (err) { ph.status = 'error: ' + err.message; renderList(); } setBusy(''); });
     }
   }
 
@@ -598,7 +598,7 @@ document.documentElement.lang = 'en';
     if (ph.backlit) parts.push('backlit: dish wall ignored');
     const blur = focusWarning(ph.focus);
     if (blur) parts.push(blur);
-    if (ph.nymphs) parts.push(`${nymphsKept(ph)} nymphs included`);
+    parts.push(ph.nymphs ? `${nymphsKept(ph)} nymphs included` : 'adults only');
     if (ph.debrisRemoved) parts.push(`${ph.debrisRemoved} straw hits dropped`);
     if (ph.count !== ph.autoCount || ph.fix.removed.length) parts.push(`corrected by hand from ${ph.autoCount}`);
     parts.push(`${(ph.ms / 1000).toFixed(1)} s`);
@@ -665,7 +665,7 @@ document.documentElement.lang = 'en';
   $('core').oninput = () => setThresholds(+$('gray').value, +$('core').value, true);
   $('presetArducam').onclick = () => setThresholds(90, 65, true);
   $('presetNotebook').onclick = () => setThresholds(75, 50, true);
-  $('nymphToggle').onchange = () => setThresholds(thresholds.gray, thresholds.core, true, $('nymphToggle').checked);
+  $('nymphToggle').onchange = () => setThresholds(thresholds.gray, thresholds.core, false, $('nymphToggle').checked);
   setThresholds(thresholds.gray, thresholds.core, false);
 
   // ---------- saving ----------

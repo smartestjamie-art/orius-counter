@@ -9,7 +9,7 @@
 
   // Counter version, stored with every result so a photo keeps the count it was given. Change it whenever
   // detection, splitting or the debris model (debris_model.js) changes.
-  const VERSION = '2026-10-30';
+  const VERSION = '2026-10-30b';
   const REFERENCE_RADIUS = 699; // outer dish rim in the notebook's photo
   const DEFAULTS = { background_sigma: 12, gray_threshold: 75, contrast_threshold: 32, component_min_area: 55,
     core_threshold: 50, core_min_pixels: 25 };
@@ -20,6 +20,8 @@
   // Backlit dishes: the dark dish-wall ring is cut out of the mask (photobooth_count.BACKLIT).
   const BACKLIT = { sectors: 120, search: [0.95, 1.03], lip_scan: [0.80, 0.94, 0.02], lip_min_sectors: 80, wall_ratio: 0.983, min_dip: 50, min_ring_sectors: 0.5, half_width: 4, keep_dark: 50,
     near: 6, open_radius: 2, split: { seed_depth: 5, peak_min_distance: 10, segment_min_area: 60 } };
+  // Long thin blobs (sticks, also curved) on front-lit photos (photobooth_count.STICK).
+  const STICK = { min_length: 60, max_width: 8.3 };
   // Nymphs, counted on request: warm blobs that are not black adults (photobooth_count.NYMPH).
   const NYMPH = { sigma: 1.2, max_blue: 140, min_tan: 35, min_red: 60, max_sat: 0.75, neutral: 15, gap: 2, max_overlap: 0.4,
     inside: 0.95, clump: 1.3, tan: { hue: [0.38, 0.75], min_red: 140, min_area: 40 }, brown: { hue: 0.05, max_red: 140, min_area: 55 } };
@@ -783,6 +785,22 @@
     return found;
   }
 
+  /** photobooth_count.stick_blobs: width = 4 x mean distance to the edge, length = area / width. */
+  function stickBlobs(det, W, H, s) {
+    const found = new Set(), pad = 3;
+    for (const c of det.components) {
+      const x0 = Math.max(0, c.c0 - pad), y0 = Math.max(0, c.r0 - pad), x1 = Math.min(W, c.c1 + pad), y1 = Math.min(H, c.r1 + pad);
+      const w = x1 - x0, h = y1 - y0, m = new Uint8Array(w * h);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) m[y * w + x] = det.filled[(y + y0) * W + x + x0];
+      const dt = edt(m, w, h);
+      let n = 0, sum = 0;
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (det.labels[(y + y0) * W + x + x0] === c.blob) { n++; sum += dt[y * w + x]; }
+      const width = 4 * sum / n;
+      if (width <= STICK.max_width * s && n / Math.max(width, 1e-9) >= STICK.min_length * s) found.add(c.blob);
+    }
+    return found;
+  }
+
   // ---------- nymphs ----------
 
   /** photobooth_count.find_nymphs, worked inside the dish's bounding square: [{x, y, area, kind: 'nymph'}]. */
@@ -890,6 +908,8 @@
     // candidates: every split segment, with why it was dropped (straw rule first, then the classifier) or null
     const candidates = resplit(det, red, w, s, prep.rgb, model, ring ? { ...SPLIT, ...BACKLIT.split } : SPLIT);
     const debris = debrisBlobs(det, prep.rgb, w, s, ring ? -Infinity : DEBRIS.min_brownness);
+    // Backlit sticks mostly lie against insects, which would go with them.
+    if (!ring) for (const b of stickBlobs(det, w, h, s)) debris.add(b);
     // The classifier only runs on front-lit photos: on backlit ones it removed as many insects as false hits.
     for (const d of candidates) d.dropped = debris.has(d.blob) ? 'straw' : model && !ring && d.p_insect < model.threshold ? 'classifier' : null;
     const adults = candidates.filter(d => !d.dropped);
@@ -900,5 +920,5 @@
       classifierRemoved: candidates.filter(d => d.dropped === 'classifier').length };
   }
 
-  return { VERSION, REFERENCE_RADIUS, SPLIT, DEBRIS, BACKLIT, NYMPH, prepare, count, findDish, luma, resizeRGB, gaussianFilter, pyRound };
+  return { VERSION, REFERENCE_RADIUS, SPLIT, DEBRIS, BACKLIT, NYMPH, STICK, prepare, count, findDish, luma, resizeRGB, gaussianFilter, pyRound };
 });
