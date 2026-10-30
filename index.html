@@ -182,7 +182,7 @@
           <button class="small" id="focusSweepBtn">Find sharpest focus</button>
           <button class="small" id="focusAutoBtn">Autofocus</button>
         </div>
-        <label class="check" id="stackRow" hidden><input type="checkbox" id="stackToggle"> Focus stack: 5 shots around this focus, merged</label>
+        <label class="check" id="stackRow" hidden><input type="checkbox" id="stackToggle"> Focus stack: find each region's sharpest focus, shoot each, merge</label>
         <label class="check"><input type="checkbox" id="avgToggle" checked> Average 3 frames per shot (less noise; keep the dish still)</label>
         <details id="camSettings" hidden>
           <summary>Exposure, gain, sharpening</summary>
@@ -986,20 +986,86 @@ document.documentElement.lang = 'en';
 
   // Focus stack: shots at the current focus and STACK.step either side, merged by the worker (sharpest region wins).
   // Each position takes 4 frames and keeps the sharpest 3 (averaged) or 1, in case one came while the lens moved.
-  const STACK = { offsets: [-2, -1, 0, 1, 2], step: 16, settle: 450 };
+  // Focus stack from per-region autofocus: sweep the focus (coarse around the current value, then fine across
+  // where the regions peaked), take each of the 3 x 3 regions' sharpest focus, shoot once per distinct value and
+  // merge (the worker keeps the sharpest version of every area).
+  const STACK = { grid: 3, coarse: 32, reach: 192, fine: 4, margin: 24, merge: 8, maxShots: 6, sweepSettle: 350, settle: 450 };
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  // Mean |Laplacian| of the luma in each cell of a grid x grid split of the frame's middle 80 %, row by row.
+  function regionSharpness(src, W, H) {
+    const n = STACK.grid, k = Math.min(1, 1600 / W), w = Math.round(W * k), h = Math.round(H * k);
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(src, 0, 0, w, h);
+    const d = ctx.getImageData(0, 0, w, h).data, g = new Float32Array(w * h);
+    for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2];
+    const out = [];
+    for (let r = 0; r < n; r++) for (let q = 0; q < n; q++) {
+      const y0 = Math.round(h * (0.1 + 0.8 * r / n)), y1 = Math.round(h * (0.1 + 0.8 * (r + 1) / n));
+      const x0 = Math.round(w * (0.1 + 0.8 * q / n)), x1 = Math.round(w * (0.1 + 0.8 * (q + 1) / n));
+      let sum = 0, cnt = 0;
+      for (let y = Math.max(1, y0); y < Math.min(h - 1, y1); y++) for (let x = Math.max(1, x0); x < Math.min(w - 1, x1); x++) {
+        const i = y * w + x; sum += Math.abs(4 * g[i] - g[i - 1] - g[i + 1] - g[i - w] - g[i + w]); cnt++;
+      }
+      out.push(sum / cnt);
+    }
+    return out;
+  }
+
+  // Focus values to shoot: each region's sharpest focus; values within STACK.merge of each other share one shot
+  // (their mean), and the merge distance widens until there are at most STACK.maxShots shots.
+  function stackPositions(peaks) {
+    const v = [...peaks].sort((a, b) => a - b);
+    for (let tol = STACK.merge; ; tol *= 1.5) {
+      const groups = [];
+      for (const p of v) {
+        const g = groups[groups.length - 1];
+        if (g && p - g[0] <= tol) g.push(p); else groups.push([p]);
+      }
+      if (groups.length <= STACK.maxShots) return groups.map(g => Math.round(g.reduce((a, b) => a + b, 0) / g.length));
+    }
+  }
+
+  // Each region's sharpest focus value.
+  async function regionPeaks(h, centre) {
+    const regions = STACK.grid * STACK.grid, best = Array(regions).fill(-1), at = Array(regions).fill(centre);
+    const measure = async v => {
+      await helper(`?value=${v}`); await sleep(STACK.sweepSettle); await nextFrame();
+      const s = regionSharpness(video, video.videoWidth, video.videoHeight);
+      s.forEach((x, i) => { if (x > best[i]) { best[i] = x; at[i] = v; } });
+      $('focus').value = v; $('focusOut').textContent = v;
+    };
+    const lo = Math.max(h.min, centre - STACK.reach), hi = Math.min(h.max, centre + STACK.reach);
+    for (let v = lo; v <= hi && stream; v += STACK.coarse) {
+      $('captureBtn').textContent = `Finding each region's focus… ${v}`;
+      await measure(v);
+    }
+    const flo = Math.max(h.min, Math.min(...at) - STACK.margin), fhi = Math.min(h.max, Math.max(...at) + STACK.margin);
+    best.fill(-1);
+    const step = fhi - flo > 160 ? 2 * STACK.fine : STACK.fine; // keep the fine pass under ~30 positions
+    for (let v = flo; v <= fhi && stream; v += step) {
+      $('captureBtn').textContent = `Fine focus per region… ${v} (${flo}–${fhi})`;
+      await measure(v);
+    }
+    return at;
+  }
+
   async function stackCapture() {
     const h = await helper(); if (!h) return null;
     const centre = h.auto ? h.value : +$('focus').value, W = video.videoWidth, H = video.videoHeight;
     const radius = Math.max(2, Math.round(W / 600));
+    const peaks = await regionPeaks(h, centre), shots = stackPositions(peaks);
+    $('focusNote').textContent = `Sharpest focus per region (top row first): ${peaks.join(', ')}. ` +
+      (shots.length === 1 ? `All at one focus (${shots[0]}): one shot.` : `Shooting at ${shots.join(', ')} and merging.`);
     let n = 0;
-    for (const o of STACK.offsets) {
+    for (const v of shots) {
       if (!stream) break;
-      const v = Math.min(h.max, Math.max(h.min, centre + o * STACK.step));
       await helper(`?value=${v}`);
-      await new Promise(r => setTimeout(r, STACK.settle));
+      await sleep(STACK.settle);
       const best = await bestFrames(4, 3);
       const rgba = best.getContext('2d').getImageData(0, 0, W, H).data;
-      $('captureBtn').textContent = `Focus stack… shot ${++n} of ${STACK.offsets.length} (focus ${v})`;
+      $('captureBtn').textContent = `Focus stack… shot ${++n} of ${shots.length} (focus ${v})`;
       await call({ type: 'stackAdd', rgba: rgba.buffer, width: W, height: H, radius }, [rgba.buffer]);
     }
     await helper(`?value=${centre}`);
