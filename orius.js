@@ -9,7 +9,7 @@
 
   // Counter version, stored with every result so a photo keeps the count it was given. Change it whenever
   // detection, splitting or the debris model (debris_model.js) changes.
-  const VERSION = '2026-10-30d';
+  const VERSION = '2026-10-30e';
   const REFERENCE_RADIUS = 699; // outer dish rim in the notebook's photo
   const DEFAULTS = { background_sigma: 12, gray_threshold: 75, contrast_threshold: 32, component_min_area: 55,
     core_threshold: 50, core_min_pixels: 25 };
@@ -23,8 +23,8 @@
   // Long thin blobs (sticks, also curved) on front-lit photos (photobooth_count.STICK).
   const STICK = { min_length: 60, max_width: 8.3 };
   // Nymphs, counted on request: warm blobs that are not black adults (photobooth_count.NYMPH).
-  const NYMPH = { level: 215, sigma: 1.2, max_blue: 140, min_tan: 35, local: { sigma: 10, min_tan: 30, min_hue: 0.45 },
-    wall: { sectors: 120, step: 4, outer: 0.75, coverage: 0.33 }, min_red: 60, max_sat: 0.75, neutral: 15, gap: 2, max_overlap: 0.4,
+  const NYMPH = { level: 215, sigma: 1.2, max_blue: 140, min_tan: 35, local: { sigma: 10, min_tan: 30, min_hue: 0.5, max_blue: 160, min_area: 20, max_sat: 0.9, wall: true },
+    wall: { sectors: 120, step: 4, outer: 0.75, coverage: 0.33, run: 3, filled: 6 }, min_red: 60, max_sat: 0.75, neutral: 15, gap: 2, max_overlap: 0.4,
     inside: 0.95, clump: 1.3, max_clump: 6, tan: { hue: [0.38, 0.8], min_red: 140, min_area: 40 }, brown: { hue: 0.05, max_red: 140, min_area: 55 } };
 
   // Python's round(): halves go to the even neighbour.
@@ -806,7 +806,7 @@
 
   /** photobooth_count.find_nymphs, worked inside the dish's bounding square: [{x, y, area, kind: 'nymph'}]. */
   function findNymphs(rgb, W, H, grayThreshold, cx, cy, r, adults, backlit) {
-    const N = NYMPH, s = r / REFERENCE_RADIUS, minTan = backlit ? N.min_tan : N.local.min_tan;
+    const N = NYMPH, s = r / REFERENCE_RADIUS, minTan = backlit ? N.min_tan : N.local.min_tan, maxBlue = backlit ? N.max_blue : N.local.max_blue;
     // margin: the blurs below see the same pixels as on the whole photo, out to the dish rim
     const m = Math.ceil(r) + 8 + Math.ceil(4 * N.local.sigma * s + 0.5) + 6;
     const x0 = Math.max(0, cx - m), y0 = Math.max(0, cy - m), w = Math.min(W, cx + m + 1) - x0, h = Math.min(H, cy + m + 1) - y0;
@@ -832,15 +832,16 @@
     const cross = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]];
     let mask = new Uint8Array(n), black = new Uint8Array(n);
     for (let i = 0; i < n; i++) {
-      mask[i] = B[i] < N.max_blue && warm[i] > minTan && R[i] >= N.min_red ? 1 : 0;
+      mask[i] = B[i] < maxBlue && warm[i] > minTan && R[i] >= N.min_red ? 1 : 0;
       const y = (i / w) | 0, x = i - y * w;
       black[i] = rgb[((y + y0) * W + x + x0) * 3] < grayThreshold && R[i] - B[i] < N.neutral ? 1 : 0;
     }
     mask = morph(morph(mask, w, h, cross, true, box), w, h, cross, false, box);
-    // Front-lit: food residue where the wall meets the floor makes a ring of warm pixels; skip those radii.
-    const wall = new Set();
-    if (!backlit) {
-      const Wl = N.wall, rings = Math.floor(r / Wl.step) + 2, hits = new Uint8Array(rings * Wl.sectors);
+    // Front-lit: food residue where the wall meets the floor makes a ring of warm pixels; skip it where it runs on.
+    let wall = null;
+    const Wl = N.wall, rings = Math.floor(r / Wl.step) + 2;
+    if (!backlit && N.local.wall) {
+      const hits = new Uint8Array(rings * Wl.sectors);
       for (let i = 0; i < n; i++) {
         if (!mask[i]) continue;
         const y = (i / w) | 0, dx = i - y * w + x0 - cx, dy = y + y0 - cy, d = Math.hypot(dx, dy);
@@ -848,10 +849,19 @@
         const sec = Math.floor((Math.atan2(dy, dx) + Math.PI) / (2 * Math.PI) * Wl.sectors) % Wl.sectors;
         hits[Math.floor(d / Wl.step) * Wl.sectors + sec] = 1;
       }
+      wall = new Uint8Array(rings * Wl.sectors);
       for (let k = 0; k < rings; k++) {
         let c = 0;
         for (let j = 0; j < Wl.sectors; j++) c += hits[k * Wl.sectors + j];
-        if (c / Wl.sectors >= Wl.coverage) { wall.add(k - 1); wall.add(k); wall.add(k + 1); }
+        if (c / Wl.sectors < Wl.coverage) continue;
+        const near = new Uint8Array(Wl.sectors);
+        for (let kk = Math.max(0, k - 1); kk <= Math.min(rings - 1, k + 1); kk++) for (let j = 0; j < Wl.sectors; j++) if (hits[kk * Wl.sectors + j]) near[j] = 1;
+        for (let j = 0; j < Wl.sectors; j++) {
+          let run = 0;
+          for (let t = -Wl.run; t <= Wl.run; t++) run += near[((j + t) % Wl.sectors + Wl.sectors) % Wl.sectors];
+          if (run < Wl.filled) continue;
+          for (let kk = k - 1; kk <= k + 1; kk++) if (kk >= 0 && kk < rings) wall[kk * Wl.sectors + j] = 1;
+        }
       }
     }
     const at = d => { const x = pyRound(d.x) - x0, y = pyRound(d.y) - y0; return x >= 0 && y >= 0 && x < w && y < h ? y * w + x : -1; };
@@ -871,12 +881,14 @@
     for (let v = 1; v <= nl; v++) {
       const a = area[v], mr = sr[v] / a, mg = sg[v] / a, mb = sb[v] / a;
       const hue = (mg - mb) / Math.max(mr - mb, 1e-9), sat = (mr - mb) / Math.max(mr, 1e-9);
-      const tan = hue >= (backlit ? T.hue[0] : N.local.min_hue) && hue <= T.hue[1] && mr >= T.min_red && a >= T.min_area * s * s;
+      const tan = hue >= (backlit ? T.hue[0] : N.local.min_hue) && hue <= T.hue[1] && mr >= T.min_red && a >= (backlit ? T.min_area : N.local.min_area) * s * s;
       const brown = hue >= Bn.hue && hue <= T.hue[1] && mr <= Bn.max_red && a >= Bn.min_area * s * s;
-      if (!((tan || brown) && sat <= N.max_sat && ov[v] / a <= N.max_overlap && !onAdult[v])) continue;
+      if (!((tan || brown) && sat <= (backlit ? N.max_sat : N.local.max_sat) && ov[v] / a <= N.max_overlap && !onAdult[v])) continue;
       const x = sx[v] / a + x0, y = sy[v] / a + y0;
       const dist = Math.hypot(x - cx, y - cy);
-      if (dist < N.inside * r && !wall.has(Math.floor(dist / N.wall.step))) { keep[v] = blobs.length + 1; blobs.push({ x, y, a, xx: 0, yy: 0, xy: 0 }); }
+      const ring = Math.floor(dist / Wl.step), sec = Math.floor((Math.atan2(y - cy, x - cx) + Math.PI) / (2 * Math.PI) * Wl.sectors) % Wl.sectors;
+      const onWall = wall && ring < rings && wall[ring * Wl.sectors + sec];
+      if (dist < N.inside * r && !onWall) { keep[v] = blobs.length + 1; blobs.push({ x, y, a, xx: 0, yy: 0, xy: 0 }); }
     }
     if (!blobs.length) return [];
     for (let i = 0; i < n; i++) {
@@ -884,7 +896,9 @@
       const b = blobs[k - 1], y = (i / w) | 0, dx = i - y * w + x0 - b.x, dy = y + y0 - b.y;
       b.xx += dx * dx; b.yy += dy * dy; b.xy += dx * dy;
     }
-    const single = N.clump * medianOf(blobs.map(b => b.a)), found = [];
+    // one nymph's area: the median of the blobs of at least tan.min_area, so faint specks don't shrink it
+    const big = blobs.filter(b => b.a >= T.min_area * s * s).map(b => b.a);
+    const single = N.clump * medianOf(big.length ? big : blobs.map(b => b.a)), found = [];
     for (const b of blobs) {
       const k = Math.max(1, pyRound(b.a / single)), d = Math.max(b.a - 1, 1);
       if (k > N.max_clump) continue; // food or egg-mass patch
