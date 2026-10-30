@@ -9,7 +9,7 @@
 
   // Counter version, stored with every result so a photo keeps the count it was given. Change it whenever
   // detection, splitting or the debris model (debris_model.js) changes.
-  const VERSION = '2026-10-30j';
+  const VERSION = '2026-10-30k';
   const REFERENCE_RADIUS = 699; // outer dish rim in the notebook's photo
   const DEFAULTS = { background_sigma: 12, gray_threshold: 75, contrast_threshold: 32, component_min_area: 55,
     core_threshold: 50, core_min_pixels: 25 };
@@ -18,7 +18,7 @@
     seed_sigma: 1.0, seed_depth: 3 };
   const DEBRIS = { min_length: 70, min_solidity: 0.75, min_brownness: 0.35 };
   // Backlit dishes: the dark dish-wall ring is cut out of the mask (photobooth_count.BACKLIT).
-  const BACKLIT = { sectors: 120, search: [0.95, 1.03], lip_scan: [0.80, 0.94, 0.02], lip_min_sectors: 80, wall_ratio: 0.983, min_dip: 50, min_ring_sectors: 0.5, half_width: 4, max_half: 16, keep_dark: 50, keep_off: 25, keep_grow: 10,
+  const BACKLIT = { sectors: 120, search: [0.95, 1.03], lip_scan: [0.80, 0.94, 0.02], lip_min_sectors: 80, wall_ratio: 0.983, min_dip: 50, min_ring_sectors: 0.5, half_width: 4, max_half: 16, count_radius: 1.02, keep_dark: 50, keep_off: 25, keep_grow: 10,
     near: 6, open_radius: 2, split: { seed_depth: 5, peak_min_distance: 10, segment_min_area: 60 } };
   // One insect split in two, on front-lit photos (photobooth_count.MERGE).
   const MERGE = { min_solidity: 0.83, max_length: 42, max_width: 18 };
@@ -1017,9 +1017,11 @@
     if (opts.contrast != null) p.contrast_threshold = opts.contrast;
     const red = new Float64Array(w * h);
     for (let i = 0, j = 0; i < w * h; i++, j += 3) red[i] = prep.rgb[j];
-    let det = detect(red, w, h, p);
-    // Backlit photos: cut the dark dish wall out, split on deeper dark cores, and sticks need not look brown.
+    // Backlit photos: cut the dark dish wall out, split on deeper dark cores, and sticks need not look brown;
+    // the counting area reaches count_radius x r, since insects sit on the wall slope just past the dish circle.
     const ring = wallRing(red, w, h, cx, cy, r);
+    if (ring && BACKLIT.count_radius !== 1) p.radius_x = p.radius_y = r * BACKLIT.count_radius;
+    let det = detect(red, w, h, p);
     if (ring) det = removeWall(det, ring, red, w, h);
     const model = opts.classifier === false ? null
       : opts.model || (typeof ORIUS_DEBRIS_MODEL !== 'undefined' ? ORIUS_DEBRIS_MODEL : null);
