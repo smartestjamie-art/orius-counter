@@ -172,6 +172,7 @@
           <button id="captureBtn" class="primary">Capture &amp; count</button>
           <button id="stopCamBtn">Stop camera</button>
         </div>
+        <div class="meta" id="streamMeta"></div>
         <div class="meta" id="focusMeta"></div>
         <div class="slider" id="focusRow" hidden>
           <label for="focus">Focus</label><output id="focusOut"></output>
@@ -182,6 +183,15 @@
           <button class="small" id="focusAutoBtn">Autofocus</button>
         </div>
         <label class="check" id="stackRow" hidden><input type="checkbox" id="stackToggle"> Focus stack: 5 shots around this focus, merged</label>
+        <label class="check"><input type="checkbox" id="avgToggle" checked> Average 3 frames per shot (less noise; keep the dish still)</label>
+        <details id="camSettings" hidden>
+          <summary>Exposure, gain, sharpening</summary>
+          <label class="check"><input type="checkbox" id="aeToggle"> Auto exposure</label>
+          <div class="slider"><label for="expo">Exposure</label><output id="expoOut"></output><input type="range" id="expo" min="0" max="1000"></div>
+          <div class="slider"><label for="gain">Gain</label><output id="gainOut"></output><input type="range" id="gain"></div>
+          <div class="slider"><label for="sharp">Sharpening</label><output id="sharpOut"></output><input type="range" id="sharp"></div>
+          <p class="note">Low gain gives less noise and less smoothing; make up with a longer exposure (the camera is fixed). Strong sharpening adds halos the counter may split on.</p>
+        </details>
         <div class="row" id="focusConnect" hidden><button class="small" id="focusConnectBtn">Connect focus helper</button></div>
         <p class="note" id="focusNote"></p>
         <label class="check"><input type="checkbox" id="liveToggle" checked> Live count on the preview</label>
@@ -945,10 +955,37 @@ document.documentElement.lang = 'en';
   $('liveToggle').onchange = () => { liveHistory = []; livePoints = []; drawLive(); $('liveMeta').textContent = ''; };
   // Capture: watch the full-resolution frames for 3 s and keep the one whose weakest band is sharpest.
   let capturing = false;
+  // ---------- frame averaging: the mean of several frames has less sensor noise, as long as nothing moves ----------
+  const nextFrame = () => new Promise(r => video.requestVideoFrameCallback ? video.requestVideoFrameCallback(() => r()) : setTimeout(r, 120));
+  function grabCanvas() {
+    const c = document.createElement('canvas'); c.width = video.videoWidth; c.height = video.videoHeight;
+    c.getContext('2d', { willReadFrequently: true }).drawImage(video, 0, 0);
+    return { canvas: c, score: Math.min(...sharpness(c, c.width, c.height)) };
+  }
+  function averageFrames(frames) {
+    if (frames.length === 1) return frames[0].canvas;
+    const W = frames[0].canvas.width, H = frames[0].canvas.height, sum = new Uint16Array(W * H * 4);
+    for (const f of frames) {
+      const d = f.canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H).data;
+      for (let i = 0; i < d.length; i++) sum[i] += d[i];
+    }
+    const out = new ImageData(W, H), n = frames.length;
+    for (let i = 0; i < sum.length; i++) out.data[i] = (sum[i] + (n >> 1)) / n;
+    const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').putImageData(out, 0, 0);
+    return c;
+  }
+  // The sharpest `keep` of `count` new frames, averaged when averaging is on (else the sharpest one).
+  async function bestFrames(count, keep) {
+    const frames = [];
+    for (let i = 0; i < count && stream; i++) { await nextFrame(); frames.push(grabCanvas()); }
+    frames.sort((a, b) => b.score - a.score);
+    return averageFrames(frames.slice(0, $('avgToggle').checked ? keep : 1));
+  }
+
   $('stackToggle').onchange = () => { try { localStorage.setItem('oriusStack', $('stackToggle').checked ? '1' : '0'); } catch {} };
 
   // Focus stack: shots at the current focus and STACK.step either side, merged by the worker (sharpest region wins).
-  // Each position keeps the sharper of two frames, in case one was taken while the lens still moved.
+  // Each position takes 4 frames and keeps the sharpest 3 (averaged) or 1, in case one came while the lens moved.
   const STACK = { offsets: [-2, -1, 0, 1, 2], step: 16, settle: 450 };
   async function stackCapture() {
     const h = await helper(); if (!h) return null;
@@ -960,14 +997,7 @@ document.documentElement.lang = 'en';
       const v = Math.min(h.max, Math.max(h.min, centre + o * STACK.step));
       await helper(`?value=${v}`);
       await new Promise(r => setTimeout(r, STACK.settle));
-      let best = null, bestScore = -1;
-      for (let k = 0; k < 2; k++) {
-        const c = document.createElement('canvas'); c.width = W; c.height = H;
-        c.getContext('2d').drawImage(video, 0, 0);
-        const sc = Math.min(...sharpness(c, W, H));
-        if (sc > bestScore) { best = c; bestScore = sc; }
-        await new Promise(r => setTimeout(r, 120));
-      }
+      const best = await bestFrames(4, 3);
       const rgba = best.getContext('2d').getImageData(0, 0, W, H).data;
       $('captureBtn').textContent = `Focus stack… shot ${++n} of ${STACK.offsets.length} (focus ${v})`;
       await call({ type: 'stackAdd', rgba: rgba.buffer, width: W, height: H, radius }, [rgba.buffer]);
@@ -995,19 +1025,17 @@ document.documentElement.lang = 'en';
       addPhoto(blob, `orius_${stamp}_stack.jpg`);
       return;
     }
-    const W = video.videoWidth, H = video.videoHeight, t0 = performance.now();
-    let best = null, bestScore = -1, frames = 0;
+    // 3 s of frames; the sharpest 3 are averaged (or the sharpest one is kept)
+    const t0 = performance.now(), keep = $('avgToggle').checked ? 3 : 1;
+    let top = [], frames = 0;
     while (performance.now() - t0 < 3000 && stream) {
-      const c = document.createElement('canvas'); c.width = W; c.height = H;
-      c.getContext('2d').drawImage(video, 0, 0);
-      const score = Math.min(...sharpness(c, W, H));
-      frames++;
-      if (score > bestScore) { best = c; bestScore = score; }
-      $('captureBtn').textContent = `Picking the sharpest frame… ${frames}`;
-      await new Promise(r => setTimeout(r, 120));
+      await nextFrame();
+      top.push(grabCanvas()); top.sort((a, b) => b.score - a.score); top = top.slice(0, keep);
+      $('captureBtn').textContent = `Picking the sharpest frames… ${++frames}`;
     }
     $('captureBtn').textContent = 'Capture & count'; $('captureBtn').disabled = false; capturing = false;
-    if (!best) return;
+    if (!top.length) return;
+    const best = averageFrames(top);
     const blob = await new Promise(r => best.toBlob(r, 'image/jpeg', 0.95));
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
     stopCamera();
@@ -1071,8 +1099,44 @@ document.documentElement.lang = 'en';
       clearTimeout(f.t); f.t = setTimeout(() => helper(`?value=${f.value}`), 60);
     };
     $('focusConnect').hidden = true; $('focusNote').textContent = '';
+    loadCameraSettings();
     return true;
   }
+
+  // Exposure (0.1 ms units, slider on a log scale), gain and sharpening through the helper's /camera.
+  async function camera(query) {
+    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 1500);
+    try {
+      const r = await fetch('http://127.0.0.1:8777/camera' + (query || ''), { signal: ctl.signal, cache: 'no-store', targetAddressSpace: 'loopback' });
+      return r.ok ? await r.json() : null;
+    } catch { return null; } finally { clearTimeout(t); }
+  }
+  let camInfo = null;
+  const expoToSlider = v => Math.round(1000 * Math.log(v / camInfo.exposure.min) / Math.log(camInfo.exposure.max / camInfo.exposure.min));
+  const sliderToExpo = t => Math.round(camInfo.exposure.min * Math.pow(camInfo.exposure.max / camInfo.exposure.min, t / 1000));
+  function showCamera(c) {
+    if (!c || !c.exposure) return;
+    camInfo = c;
+    $('aeToggle').checked = !!c.auto_exposure;
+    $('expo').value = expoToSlider(c.exposure.value); $('expoOut').textContent = `${(c.exposure.value / 10).toFixed(1)} ms${c.auto_exposure ? ' (auto)' : ''}`;
+    for (const [id, key] of [['gain', 'gain'], ['sharp', 'sharpness']]) {
+      if (!c[key]) continue;
+      const el = $(id); el.min = c[key].min; el.max = c[key].max; el.value = c[key].value; $(id + 'Out').textContent = c[key].value;
+    }
+  }
+  async function loadCameraSettings() {
+    const c = await camera();
+    $('camSettings').hidden = !(c && c.exposure);
+    showCamera(c);
+  }
+  const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+  const setCamera = debounce(async q => showCamera(await camera(q)), 80);
+  $('aeToggle').onchange = () => setCamera(`?auto_exposure=${$('aeToggle').checked ? 1 : 0}`);
+  $('expo').oninput = () => { if (!camInfo) return; const v = sliderToExpo(+$('expo').value); $('expoOut').textContent = `${(v / 10).toFixed(1)} ms`; $('aeToggle').checked = false; setCamera(`?exposure=${v}`); };
+  $('gain').oninput = () => { $('gainOut').textContent = $('gain').value; setCamera(`?gain=${$('gain').value}`); };
+  $('sharp').oninput = () => { $('sharpOut').textContent = $('sharp').value; setCamera(`?sharpness=${$('sharp').value}`); };
+  // while auto exposure runs, follow the value it picks
+  setInterval(() => { if (stream && camInfo && $('aeToggle').checked && !$('camSettings').hidden) camera().then(showCamera); }, 2000);
   $('focusConnectBtn').onclick = async () => {
     $('focusNote').textContent = 'Connecting…';
     if (!await connectHelper()) $('focusNote').textContent = 'Could not reach the focus helper. Is its window open? In Chrome, click the icon at the left of the address bar, open Site settings and set “Local network access” (or “Apps on device”) to Allow, then try again.';
@@ -1110,7 +1174,10 @@ document.documentElement.lang = 'en';
 
   // Live focus meter, so the dish and camera can be levelled before capturing.
   setInterval(() => {
-    if (!stream || !video.videoWidth) { $('focusMeta').textContent = ''; return; }
+    if (!stream || !video.videoWidth) { $('focusMeta').textContent = $('streamMeta').textContent = ''; return; }
+    const st = stream.getVideoTracks()[0].getSettings();
+    $('streamMeta').textContent = `Stream: ${video.videoWidth} × ${video.videoHeight}` + (st.frameRate ? ` at ${Math.round(st.frameRate)} fps` : '') +
+      (video.videoWidth * video.videoHeight < 8e6 ? ' — lower than the camera’s 16 MP' : '');
     const f = sharpness(video, video.videoWidth, video.videoHeight);
     const warn = focusWarning(f);
     $('focusMeta').textContent = `Focus: left ${f[0].toFixed(1)} · centre ${f[1].toFixed(1)} · right ${f[2].toFixed(1)}` +
