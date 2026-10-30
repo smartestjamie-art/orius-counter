@@ -9,7 +9,7 @@
 
   // Counter version, stored with every result so a photo keeps the count it was given. Change it whenever
   // detection, splitting or the debris model (debris_model.js) changes.
-  const VERSION = '2026-10-30c';
+  const VERSION = '2026-10-30d';
   const REFERENCE_RADIUS = 699; // outer dish rim in the notebook's photo
   const DEFAULTS = { background_sigma: 12, gray_threshold: 75, contrast_threshold: 32, component_min_area: 55,
     core_threshold: 50, core_min_pixels: 25 };
@@ -23,7 +23,8 @@
   // Long thin blobs (sticks, also curved) on front-lit photos (photobooth_count.STICK).
   const STICK = { min_length: 60, max_width: 8.3 };
   // Nymphs, counted on request: warm blobs that are not black adults (photobooth_count.NYMPH).
-  const NYMPH = { level: 215, sigma: 1.2, max_blue: 140, min_tan: 35, min_tan_frontlit: 100, min_red: 60, max_sat: 0.75, neutral: 15, gap: 2, max_overlap: 0.4,
+  const NYMPH = { level: 215, sigma: 1.2, max_blue: 140, min_tan: 35, local: { sigma: 10, min_tan: 30, min_hue: 0.45 },
+    wall: { sectors: 120, step: 4, outer: 0.75, coverage: 0.33 }, min_red: 60, max_sat: 0.75, neutral: 15, gap: 2, max_overlap: 0.4,
     inside: 0.95, clump: 1.3, max_clump: 6, tan: { hue: [0.38, 0.8], min_red: 140, min_area: 40 }, brown: { hue: 0.05, max_red: 140, min_area: 55 } };
 
   // Python's round(): halves go to the even neighbour.
@@ -805,8 +806,9 @@
 
   /** photobooth_count.find_nymphs, worked inside the dish's bounding square: [{x, y, area, kind: 'nymph'}]. */
   function findNymphs(rgb, W, H, grayThreshold, cx, cy, r, adults, backlit) {
-    const minTan = backlit ? NYMPH.min_tan : NYMPH.min_tan_frontlit;
-    const N = NYMPH, s = r / REFERENCE_RADIUS, m = Math.ceil(r) + 8;
+    const N = NYMPH, s = r / REFERENCE_RADIUS, minTan = backlit ? N.min_tan : N.local.min_tan;
+    // margin: the blurs below see the same pixels as on the whole photo, out to the dish rim
+    const m = Math.ceil(r) + 8 + Math.ceil(4 * N.local.sigma * s + 0.5) + 6;
     const x0 = Math.max(0, cx - m), y0 = Math.max(0, cy - m), w = Math.min(W, cx + m + 1) - x0, h = Math.min(H, cy + m + 1) - y0;
     // Scale each channel so the dish background (75th percentile inside 0.9 r) reads N.level.
     const ch = [0, 1, 2].map(c => {
@@ -824,14 +826,34 @@
       return g;
     });
     const [R, G, B] = ch, n = w * h, box = [0, h, 0, w];
+    let warm = new Float64Array(n);
+    for (let i = 0; i < n; i++) warm[i] = R[i] - B[i];
+    if (!backlit) { const blur = gaussianFilter(warm, w, h, N.local.sigma * s); for (let i = 0; i < n; i++) warm[i] -= blur[i]; }
     const cross = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]];
     let mask = new Uint8Array(n), black = new Uint8Array(n);
     for (let i = 0; i < n; i++) {
-      mask[i] = B[i] < N.max_blue && R[i] - B[i] > minTan && R[i] >= N.min_red ? 1 : 0;
+      mask[i] = B[i] < N.max_blue && warm[i] > minTan && R[i] >= N.min_red ? 1 : 0;
       const y = (i / w) | 0, x = i - y * w;
       black[i] = rgb[((y + y0) * W + x + x0) * 3] < grayThreshold && R[i] - B[i] < N.neutral ? 1 : 0;
     }
     mask = morph(morph(mask, w, h, cross, true, box), w, h, cross, false, box);
+    // Front-lit: food residue where the wall meets the floor makes a ring of warm pixels; skip those radii.
+    const wall = new Set();
+    if (!backlit) {
+      const Wl = N.wall, rings = Math.floor(r / Wl.step) + 2, hits = new Uint8Array(rings * Wl.sectors);
+      for (let i = 0; i < n; i++) {
+        if (!mask[i]) continue;
+        const y = (i / w) | 0, dx = i - y * w + x0 - cx, dy = y + y0 - cy, d = Math.hypot(dx, dy);
+        if (d < Wl.outer * r || d >= r) continue;
+        const sec = Math.floor((Math.atan2(dy, dx) + Math.PI) / (2 * Math.PI) * Wl.sectors) % Wl.sectors;
+        hits[Math.floor(d / Wl.step) * Wl.sectors + sec] = 1;
+      }
+      for (let k = 0; k < rings; k++) {
+        let c = 0;
+        for (let j = 0; j < Wl.sectors; j++) c += hits[k * Wl.sectors + j];
+        if (c / Wl.sectors >= Wl.coverage) { wall.add(k - 1); wall.add(k); wall.add(k + 1); }
+      }
+    }
     const at = d => { const x = pyRound(d.x) - x0, y = pyRound(d.y) - y0; return x >= 0 && y >= 0 && x < w && y < h ? y * w + x : -1; };
     for (const d of adults) { const i = at(d); if (i >= 0) black[i] = 1; }
     for (let k = 0; k < N.gap; k++) black = morph(black, w, h, cross, false, box);
@@ -849,11 +871,12 @@
     for (let v = 1; v <= nl; v++) {
       const a = area[v], mr = sr[v] / a, mg = sg[v] / a, mb = sb[v] / a;
       const hue = (mg - mb) / Math.max(mr - mb, 1e-9), sat = (mr - mb) / Math.max(mr, 1e-9);
-      const tan = hue >= T.hue[0] && hue <= T.hue[1] && mr >= T.min_red && a >= T.min_area * s * s;
+      const tan = hue >= (backlit ? T.hue[0] : N.local.min_hue) && hue <= T.hue[1] && mr >= T.min_red && a >= T.min_area * s * s;
       const brown = hue >= Bn.hue && hue <= T.hue[1] && mr <= Bn.max_red && a >= Bn.min_area * s * s;
       if (!((tan || brown) && sat <= N.max_sat && ov[v] / a <= N.max_overlap && !onAdult[v])) continue;
       const x = sx[v] / a + x0, y = sy[v] / a + y0;
-      if (Math.hypot(x - cx, y - cy) < N.inside * r) { keep[v] = blobs.length + 1; blobs.push({ x, y, a, xx: 0, yy: 0, xy: 0 }); }
+      const dist = Math.hypot(x - cx, y - cy);
+      if (dist < N.inside * r && !wall.has(Math.floor(dist / N.wall.step))) { keep[v] = blobs.length + 1; blobs.push({ x, y, a, xx: 0, yy: 0, xy: 0 }); }
     }
     if (!blobs.length) return [];
     for (let i = 0; i < n; i++) {
