@@ -746,7 +746,12 @@ document.documentElement.lang = 'en';
     enqueue(async () => { try { await countPhoto(ph); } catch (err) { ph.status = 'error: ' + err.message; renderList(); } setBusy(''); });
   };
 
-  function select(ph) { selected = ph; zoom = null; draw(); renderCount(); renderList(); renderFix(); }
+  // Choosing a photo shows it: the camera preview, which hides the photo view, is stopped (Use camera brings it back).
+  function select(ph) {
+    selected = ph; zoom = null;
+    if (stream && !capturing) stopCamera();
+    draw(); renderCount(); renderList(); renderFix();
+  }
   function removePhoto(ph) {
     const i = photos.indexOf(ph); if (i < 0) return;
     photos.splice(i, 1); call({ type: 'drop', id: ph.id }).catch(() => {});
