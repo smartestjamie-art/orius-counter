@@ -1120,8 +1120,24 @@ document.documentElement.lang = 'en';
     return c;
   }
 
+  // Every capture asks for a sample ID (suggesting the next one: A3 -> A4), which starts the photo's file name.
+  function askSampleId() {
+    let last = '';
+    try { last = localStorage.getItem('oriusSampleId') || ''; } catch {}
+    const m = last.match(/^(.*?)(\d+)$/);
+    const next = m ? m[1] + String(+m[2] + 1).padStart(m[2].length, '0') : last;
+    const raw = prompt('Sample ID for this photo (letters and numbers, e.g. A3):', next);
+    if (raw === null) return null;
+    const id = raw.trim().replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+    if (!id) return null;
+    try { localStorage.setItem('oriusSampleId', id); } catch {}
+    return id;
+  }
+
   $('captureBtn').onclick = async () => {
     if (!video.videoWidth || capturing) return;
+    const sampleId = askSampleId();
+    if (!sampleId) return;
     capturing = true; $('captureBtn').disabled = true;
     if (focusConnected && $('stackToggle').checked) {
       let c = null;
@@ -1131,7 +1147,7 @@ document.documentElement.lang = 'en';
       const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.95));
       const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
       stopCamera();
-      addPhoto(blob, `orius_${stamp}_stack.jpg`);
+      addPhoto(blob, `${sampleId}_orius_${stamp}_stack.jpg`);
       return;
     }
     // 3 s of frames; the sharpest 3 are averaged (or the sharpest one is kept)
@@ -1148,7 +1164,7 @@ document.documentElement.lang = 'en';
     const blob = await new Promise(r => best.toBlob(r, 'image/jpeg', 0.95));
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
     stopCamera();
-    addPhoto(blob, `orius_${stamp}.jpg`);
+    addPhoto(blob, `${sampleId}_orius_${stamp}.jpg`);
   };
 
   // ---------- focus: the camera's autofocus lands differently on every shot ----------

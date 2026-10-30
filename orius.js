@@ -9,7 +9,7 @@
 
   // Counter version, stored with every result so a photo keeps the count it was given. Change it whenever
   // detection, splitting or the debris model (debris_model.js) changes.
-  const VERSION = '2026-10-30h';
+  const VERSION = '2026-10-30i';
   const REFERENCE_RADIUS = 699; // outer dish rim in the notebook's photo
   const DEFAULTS = { background_sigma: 12, gray_threshold: 75, contrast_threshold: 32, component_min_area: 55,
     core_threshold: 50, core_min_pixels: 25 };
@@ -18,7 +18,7 @@
     seed_sigma: 1.0, seed_depth: 3 };
   const DEBRIS = { min_length: 70, min_solidity: 0.75, min_brownness: 0.35 };
   // Backlit dishes: the dark dish-wall ring is cut out of the mask (photobooth_count.BACKLIT).
-  const BACKLIT = { sectors: 120, search: [0.95, 1.03], lip_scan: [0.80, 0.94, 0.02], lip_min_sectors: 80, wall_ratio: 0.983, min_dip: 50, min_ring_sectors: 0.5, half_width: 4, keep_dark: 50,
+  const BACKLIT = { sectors: 120, search: [0.95, 1.03], lip_scan: [0.80, 0.94, 0.02], lip_min_sectors: 80, wall_ratio: 0.983, min_dip: 50, min_ring_sectors: 0.5, half_width: 4, keep_dark: 50, keep_open: 3,
     near: 6, open_radius: 2, split: { seed_depth: 5, peak_min_distance: 10, segment_min_area: 60 } };
   // One insect split in two, on front-lit photos (photobooth_count.MERGE).
   const MERGE = { min_solidity: 0.83, max_length: 42, max_width: 18 };
@@ -475,16 +475,21 @@
   /** Cut the ring out of the detector's mask and relabel, as detect() would. */
   function removeWall(det, ring, gray, w, h) {
     const B = BACKLIT, p = det.parameters, n = w * h;
-    const filled = new Uint8Array(n);
-    for (let i = 0; i < n; i++) filled[i] = det.filled[i] && !(ring[i] && gray[i] >= B.keep_dark) ? 1 : 0;
     // The ring lies inside the dish's bounding square, so the morphology only needs that square plus a margin.
-    const [cx, cy] = [p.center_x, p.center_y], m = Math.ceil(BACKLIT.search[1] * p.radius_x) + 2 + B.near + B.open_radius;
+    const [cx, cy] = [p.center_x, p.center_y], m = Math.ceil(BACKLIT.search[1] * p.radius_x) + 2 + B.near + Math.max(B.open_radius, B.keep_open);
     const box = [Math.max(0, cy - m), Math.min(h, cy + m + 1), Math.max(0, cx - m), Math.min(w, cx + m + 1)];
     let near = ring;
     const cross = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]];
     for (let k = 0; k < B.near; k++) near = morph(near, w, h, cross, false, box);
-    const R = B.open_radius, disk = [];
-    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) if (Math.sqrt(dx * dx + dy * dy) <= R) disk.push([dx, dy]);
+    const diskOf = R => { const d = []; for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) if (Math.sqrt(dx * dx + dy * dy) <= R) d.push([dx, dy]); return d; };
+    // Dark pixels on the ring stay only where wider than the wall line itself (an insect on the wall): in sharp
+    // photos the wall line is darker than keep_dark but only a few pixels wide.
+    let dark = new Uint8Array(n);
+    for (let i = 0; i < n; i++) dark[i] = near[i] && gray[i] < B.keep_dark ? 1 : 0;
+    if (B.keep_open) { const kd = diskOf(B.keep_open); dark = morph(morph(dark, w, h, kd, true, box), w, h, kd, false, box); }
+    const filled = new Uint8Array(n);
+    for (let i = 0; i < n; i++) filled[i] = det.filled[i] && !(ring[i] && !dark[i]) ? 1 : 0;
+    const disk = diskOf(B.open_radius);
     const opened = morph(morph(filled, w, h, disk, true, box), w, h, disk, false, box);
     for (let i = 0; i < n; i++) if (near[i]) filled[i] = opened[i];
     const { labels, n: nlab, info } = label4(filled, w, h);
