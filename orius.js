@@ -9,7 +9,7 @@
 
   // Counter version, stored with every result so a photo keeps the count it was given. Change it whenever
   // detection, splitting or the debris model (debris_model.js) changes.
-  const VERSION = '2026-10-30f';
+  const VERSION = '2026-10-30g';
   const REFERENCE_RADIUS = 699; // outer dish rim in the notebook's photo
   const DEFAULTS = { background_sigma: 12, gray_threshold: 75, contrast_threshold: 32, component_min_area: 55,
     core_threshold: 50, core_min_pixels: 25 };
@@ -20,6 +20,8 @@
   // Backlit dishes: the dark dish-wall ring is cut out of the mask (photobooth_count.BACKLIT).
   const BACKLIT = { sectors: 120, search: [0.95, 1.03], lip_scan: [0.80, 0.94, 0.02], lip_min_sectors: 80, wall_ratio: 0.983, min_dip: 50, min_ring_sectors: 0.5, half_width: 4, keep_dark: 50,
     near: 6, open_radius: 2, split: { seed_depth: 5, peak_min_distance: 10, segment_min_area: 60 } };
+  // One insect split in two, on front-lit photos (photobooth_count.MERGE).
+  const MERGE = { min_solidity: 0.83, max_length: 42, max_width: 18 };
   // Long thin blobs (sticks, also curved) on front-lit photos (photobooth_count.STICK).
   const STICK = { min_length: 60, max_width: 8.3 };
   // Nymphs, counted on request: warm blobs that are not black adults (photobooth_count.NYMPH).
@@ -768,9 +770,9 @@
       a /= n; b /= n; d /= n;
       const major = 4 * Math.sqrt((a + d) / 2 + Math.sqrt(((a - d) / 2) ** 2 + b * b));
       if (major < DEBRIS.min_length * s) continue;
-      // solidity: pixels / pixels whose centres lie in the hull of all pixel corners (skimage convex_image)
+      // solidity: pixels / pixels whose centres lie in the hull of the pixels' edge midpoints (skimage convex_image)
       const corners = [];
-      for (let i = 0; i < n; i++) for (const [ox, oy] of [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]]) corners.push([xs[i] + ox, ys[i] + oy]);
+      for (let i = 0; i < n; i++) for (const [ox, oy] of [[-0.5, 0], [0.5, 0], [0, -0.5], [0, 0.5]]) corners.push([xs[i] + ox, ys[i] + oy]);
       const hull = convexHull(corners);
       let inside = 0;
       for (let y = c.r0; y < c.r1; y++) for (let x = c.c0; x < c.c1; x++) {
@@ -784,6 +786,47 @@
       if (n / inside >= DEBRIS.min_solidity && (r - bl) / Math.max(r, 1) >= minBrownness) found.add(c.blob);
     }
     return found;
+  }
+
+  /** Centre, axis lengths (skimage regionprops) and solidity of a component, as debrisBlobs measures them. */
+  function componentShape(det, c, W) {
+    const xs = [], ys = [];
+    let sx = 0, sy = 0;
+    for (let y = c.r0; y < c.r1; y++) for (let x = c.c0; x < c.c1; x++) {
+      if (det.labels[y * W + x] !== c.blob) continue;
+      xs.push(x); ys.push(y); sx += x; sy += y;
+    }
+    const n = xs.length, mx = sx / n, my = sy / n;
+    let a = 0, b = 0, d = 0;
+    for (let i = 0; i < n; i++) { const dx = xs[i] - mx, dy = ys[i] - my; a += dx * dx; b += dx * dy; d += dy * dy; }
+    a /= n; b /= n; d /= n;
+    const root = Math.sqrt(((a - d) / 2) ** 2 + b * b);
+    const corners = [];
+    for (let i = 0; i < n; i++) for (const [ox, oy] of [[-0.5, 0], [0.5, 0], [0, -0.5], [0, 0.5]]) corners.push([xs[i] + ox, ys[i] + oy]);
+    const hull = convexHull(corners);
+    let inside = 0;
+    for (let y = c.r0; y < c.r1; y++) for (let x = c.c0; x < c.c1; x++) {
+      let ok = true;
+      for (let k = 0; k < hull.length && ok; k++) if (cross(hull[k], hull[(k + 1) % hull.length], [x, y]) < -1e-9) ok = false;
+      if (ok) inside++;
+    }
+    return { n, x: mx, y: my, major: 4 * Math.sqrt((a + d) / 2 + root), minor: 4 * Math.sqrt(Math.max(0, (a + d) / 2 - root)), solidity: n / inside };
+  }
+
+  /** photobooth_count.merge_single: compact, insect-sized components with several segments count once. */
+  function mergeSingle(det, cands, W, s) {
+    const groups = new Map();
+    for (const d of cands) { if (!groups.has(d.blob)) groups.set(d.blob, []); groups.get(d.blob).push(d); }
+    for (const c of det.components) {
+      const g = groups.get(c.blob);
+      if (!g || g.length < 2) continue;
+      const f = componentShape(det, c, W);
+      if (f.solidity >= MERGE.min_solidity && f.major <= MERGE.max_length * s && f.minor <= MERGE.max_width * s) {
+        const keep = g.reduce((a, b) => b.area > a.area ? b : a);
+        groups.set(c.blob, [{ ...keep, x: f.x, y: f.y, area: f.n, core_pixels: g.reduce((t, d) => t + d.core_pixels, 0) }]);
+      }
+    }
+    return [...groups.values()].flat();
   }
 
   /** photobooth_count.stick_blobs: width = 4 x mean distance to the edge, length = area / width. */
@@ -955,7 +998,9 @@
     const model = opts.classifier === false ? null
       : opts.model || (typeof ORIUS_DEBRIS_MODEL !== 'undefined' ? ORIUS_DEBRIS_MODEL : null);
     // candidates: every split segment, with why it was dropped (straw rule first, then the classifier) or null
-    const candidates = resplit(det, red, w, s, prep.rgb, model, ring ? { ...SPLIT, ...BACKLIT.split } : SPLIT);
+    let candidates = resplit(det, red, w, s, prep.rgb, model, ring ? { ...SPLIT, ...BACKLIT.split } : SPLIT);
+    // Front-lit only: packed backlit insects lose real pairs to it.
+    if (!ring) candidates = mergeSingle(det, candidates, w, s);
     const debris = debrisBlobs(det, prep.rgb, w, s, ring ? -Infinity : DEBRIS.min_brownness);
     // Backlit sticks mostly lie against insects, which would go with them.
     if (!ring) for (const b of stickBlobs(det, w, h, s)) debris.add(b);
@@ -969,5 +1014,5 @@
       classifierRemoved: candidates.filter(d => d.dropped === 'classifier').length };
   }
 
-  return { VERSION, REFERENCE_RADIUS, SPLIT, DEBRIS, BACKLIT, NYMPH, STICK, prepare, count, findDish, luma, resizeRGB, gaussianFilter, pyRound };
+  return { VERSION, REFERENCE_RADIUS, SPLIT, DEBRIS, BACKLIT, NYMPH, STICK, MERGE, prepare, count, findDish, luma, resizeRGB, gaussianFilter, pyRound };
 });
