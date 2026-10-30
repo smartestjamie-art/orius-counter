@@ -20,12 +20,14 @@ onmessage = e => {
       postMessage({ seq: m.seq, count: r.count, points: r.detections.map(d => [d.x, d.y]),
         cands: r.candidates.map(d => [d.x, d.y, d.p_insect == null ? 1 : d.p_insect, d.dropped === 'straw' ? 1 : d.dropped ? 2 : 0]),
         feats: r.candidates.map(d => d.features ? names.map(k => d.features[k]) : null), featureNames: names,
-        debrisRemoved: r.debrisRemoved + r.classifierRemoved, backlit: r.backlit, ms: Math.round(performance.now() - t) });
+        debrisRemoved: r.debrisRemoved + r.classifierRemoved, backlit: r.backlit, version: Orius.VERSION, ms: Math.round(performance.now() - t) });
     } else if (m.type === 'live') {
       // A preview frame: prepared and counted once, not cached; points as fractions of the frame.
       const prep = Orius.prepare(new Uint8Array(m.rgb), m.width, m.height);
       const r = Orius.count(prep, { gray: m.gray, core: m.core });
       postMessage({ seq: m.seq, count: r.count, points: r.detections.map(d => [d.x / prep.width, d.y / prep.height]) });
+    } else if (m.type === 'version') {
+      postMessage({ seq: m.seq, version: Orius.VERSION });
     } else if (m.type === 'drop') {
       cache.delete(m.id);
       postMessage({ seq: m.seq });

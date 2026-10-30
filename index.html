@@ -140,6 +140,7 @@
       <div class="panel" aria-live="polite">
         <div class="count"><span class="n" id="countN">–</span><span class="unit">Orius</span></div>
         <div class="meta" id="countMeta">Counting the example photo…</div>
+        <div class="row" style="margin-top:8px"><button class="small" id="recountBtn" hidden>Recount with the latest counter</button></div>
       </div>
 
       <div class="panel">
@@ -282,9 +283,17 @@ document.documentElement.lang = 'en';
     });
   }
 
+  // A photo keeps the result it was counted with: reopening the page or a newer counter does not change it.
+  // It is recounted only when the thresholds change or on "Recount with the latest counter".
+  const RESULT = ['version', 'autoCount', 'points', 'cands', 'feats', 'featureNames', 'debrisRemoved', 'backlit', 'ms',
+    'gray', 'core', 'dish', 'prepW', 'prepH', 'origW', 'origH'];
   function savePhoto(ph) {
-    if (ph.key) store('photos', 'readwrite', s => s.put({ key: ph.key, name: ph.name, blob: ph.blob, added: ph.addedAt, fix: ph.fix }));
+    if (!ph.key) return;
+    const result = ph.status === 'done' ? Object.fromEntries(RESULT.map(k => [k, ph[k]])) : null;
+    store('photos', 'readwrite', s => s.put({ key: ph.key, name: ph.name, blob: ph.blob, added: ph.addedAt, fix: ph.fix, result }));
   }
+  let counterVersion = null;
+  call({ type: 'version' }).then(r => { counterVersion = r.version; renderCount(); }).catch(() => {});
 
   // ---------- decoding ----------
   async function decode(blob) {
@@ -310,18 +319,22 @@ document.documentElement.lang = 'en';
       ph.key = `${ph.addedAt}-${ph.id}`;
       savePhoto(ph);
     }
+    const stored = rec && rec.result;
+    if (stored) { Object.assign(ph, stored, { status: 'done' }); applyFix(ph); }
     photos.push(ph);
     if (!selected || selected.example) select(ph);
     renderList();
     enqueue(async () => {
       try {
-        ph.status = 'reading';  renderList(); setBusy(`Reading ${name}…`);
-        const { bmp, rgb } = await decode(blob);
-        ph.bmp = bmp; ph.origW = bmp.width; ph.origH = bmp.height; ph.focus = sharpness(bmp, bmp.width, bmp.height);
-        if (selected === ph) draw();
-        ph.status = 'finding dish'; renderList(); setBusy(`Finding the dish in ${name}…`);
-        const prep = await call({ type: 'prepare', id: ph.id, rgb: rgb.buffer, width: bmp.width, height: bmp.height }, [rgb.buffer]);
-        Object.assign(ph, { prepW: prep.width, prepH: prep.height, dish: prep.dish });
+        if (stored) { // only decode it for display; the stored result stands
+          ph.status = 'reading'; renderList();
+          const { bmp } = await decode(blob);
+          Object.assign(ph, { bmp, focus: sharpness(bmp, bmp.width, bmp.height), status: 'done' });
+          renderList();
+          if (selected === ph) { draw(); renderCount(); }
+          return;
+        }
+        await ensurePrepared(ph);
         await countPhoto(ph);
       } catch (err) {
         ph.status = 'error: ' + err.message; renderList();
@@ -330,13 +343,27 @@ document.documentElement.lang = 'en';
     });
   }
 
+  // Decode the photo and let the worker find the dish and scale it (once per page visit).
+  async function ensurePrepared(ph) {
+    if (ph.prepared) return;
+    ph.status = 'reading'; renderList(); setBusy(`Reading ${ph.name}…`);
+    const { bmp, rgb } = await decode(ph.blob);
+    ph.bmp = bmp; ph.origW = bmp.width; ph.origH = bmp.height; ph.focus = sharpness(bmp, bmp.width, bmp.height);
+    if (selected === ph) draw();
+    ph.status = 'finding dish'; renderList(); setBusy(`Finding the dish in ${ph.name}…`);
+    const prep = await call({ type: 'prepare', id: ph.id, rgb: rgb.buffer, width: bmp.width, height: bmp.height }, [rgb.buffer]);
+    Object.assign(ph, { prepW: prep.width, prepH: prep.height, dish: prep.dish, prepared: true });
+  }
+
   async function countPhoto(ph) {
+    await ensurePrepared(ph);
     ph.status = 'counting'; renderList(); setBusy(`Counting ${ph.name}…`);
     const t = { ...thresholds };
     const r = await call({ type: 'count', id: ph.id, gray: t.gray, core: t.core });
     Object.assign(ph, { autoCount: r.count, points: r.points, cands: r.cands, feats: r.feats, featureNames: r.featureNames,
-      debrisRemoved: r.debrisRemoved, backlit: r.backlit, ms: r.ms, gray: t.gray, core: t.core, status: 'done' });
+      debrisRemoved: r.debrisRemoved, backlit: r.backlit, version: r.version, ms: r.ms, gray: t.gray, core: t.core, status: 'done' });
     applyFix(ph);
+    savePhoto(ph);
     renderList();
     if (selected === ph) { draw(); renderCount(); }
     renderFix();
@@ -557,6 +584,7 @@ document.documentElement.lang = 'en';
 
   function renderCount() {
     const ph = selected;
+    $('recountBtn').hidden = true;
     if (!ph) { $('countN').textContent = '–'; $('countMeta').textContent = 'Add a photo to count.'; return; }
     $('countN').textContent = ph.count == null ? '…' : ph.count;
     if (ph.count == null) { $('countMeta').textContent = `${ph.name}: ${ph.status}`; return; }
@@ -568,7 +596,10 @@ document.documentElement.lang = 'en';
     if (ph.debrisRemoved) parts.push(`${ph.debrisRemoved} straw hits dropped`);
     if (ph.count !== ph.autoCount || ph.fix.removed.length) parts.push(`corrected by hand from ${ph.autoCount}`);
     parts.push(`${(ph.ms / 1000).toFixed(1)} s`);
+    const old = !ph.example && counterVersion && ph.version !== counterVersion;
+    if (old) parts.push(`counted with an older counter${ph.version ? ` (${ph.version})` : ''}`);
     $('countMeta').textContent = parts.join(' · ');
+    $('recountBtn').hidden = !old;
   }
 
   function renderList() {
@@ -591,6 +622,12 @@ document.documentElement.lang = 'en';
     }
     if (!photos.length) { const tr = document.createElement('tr'); const td = document.createElement('td'); td.colSpan = 5; td.className = 'status'; td.textContent = 'No photos yet. Add dish photos to count them.'; tr.append(td); tb.append(tr); }
   }
+
+  $('recountBtn').onclick = () => {
+    const ph = selected; if (!ph || ph.status !== 'done') return;
+    $('recountBtn').hidden = true;
+    enqueue(async () => { try { await countPhoto(ph); } catch (err) { ph.status = 'error: ' + err.message; renderList(); } setBusy(''); });
+  };
 
   function select(ph) { selected = ph; zoom = null; draw(); renderCount(); renderList(); renderFix(); }
   function removePhoto(ph) {

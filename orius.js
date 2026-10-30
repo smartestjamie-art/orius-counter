@@ -7,6 +7,9 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
+  // Counter version, stored with every result so a photo keeps the count it was given. Change it whenever
+  // detection, splitting or the debris model (debris_model.js) changes.
+  const VERSION = '2026-10-30';
   const REFERENCE_RADIUS = 699; // outer dish rim in the notebook's photo
   const DEFAULTS = { background_sigma: 12, gray_threshold: 75, contrast_threshold: 32, component_min_area: 55,
     core_threshold: 50, core_min_pixels: 25 };
@@ -826,5 +829,5 @@
       classifierRemoved: candidates.filter(d => d.dropped === 'classifier').length };
   }
 
-  return { REFERENCE_RADIUS, SPLIT, DEBRIS, BACKLIT, prepare, count, findDish, luma, resizeRGB, gaussianFilter, pyRound };
+  return { VERSION, REFERENCE_RADIUS, SPLIT, DEBRIS, BACKLIT, prepare, count, findDish, luma, resizeRGB, gaussianFilter, pyRound };
 });
