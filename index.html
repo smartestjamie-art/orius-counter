@@ -207,7 +207,8 @@
           <button class="small" id="presetArducam">Arducam 90 / 65</button>
           <button class="small" id="presetNotebook">Notebook 75 / 50</button>
         </div>
-        <p class="note">Changes recount every photo in the list.</p>
+        <label class="check"><input type="checkbox" id="nymphToggle"> Also count nymphs (pale and red-brown, amber dots)</label>
+        <p class="note">Off: black adults only. Changes recount every photo in the list.</p>
       </div>
 
       <div class="panel">
@@ -259,8 +260,8 @@ document.documentElement.lang = 'en';
   const photos = [];
   let selected = null, zoom = null, nextId = 1;
   let stream = null, liveBusy = false, liveHistory = [], livePoints = [], liveTimer = null, magTimer = null;
-  let thresholds = { gray: 90, core: 65 };
-  try { const t = JSON.parse(localStorage.getItem('oriusThresholds') || 'null'); if (t && t.gray && t.core) thresholds = t; } catch {}
+  let thresholds = { gray: 90, core: 65, nymphs: false };
+  try { const t = JSON.parse(localStorage.getItem('oriusThresholds') || 'null'); if (t && t.gray && t.core) thresholds = { ...thresholds, ...t }; } catch {}
 
   // ---------- keeping photos: IndexedDB survives a refresh; an optional folder receives files ----------
   const db = new Promise(resolve => {
@@ -286,7 +287,7 @@ document.documentElement.lang = 'en';
   // A photo keeps the result it was counted with: reopening the page or a newer counter does not change it.
   // It is recounted only when the thresholds change or on "Recount with the latest counter".
   const RESULT = ['version', 'autoCount', 'points', 'cands', 'feats', 'featureNames', 'debrisRemoved', 'backlit', 'ms',
-    'gray', 'core', 'dish', 'prepW', 'prepH', 'origW', 'origH'];
+    'gray', 'core', 'nymphs', 'dish', 'prepW', 'prepH', 'origW', 'origH'];
   function savePhoto(ph) {
     if (!ph.key) return;
     const result = ph.status === 'done' ? Object.fromEntries(RESULT.map(k => [k, ph[k]])) : null;
@@ -359,9 +360,9 @@ document.documentElement.lang = 'en';
     await ensurePrepared(ph);
     ph.status = 'counting'; renderList(); setBusy(`Counting ${ph.name}…`);
     const t = { ...thresholds };
-    const r = await call({ type: 'count', id: ph.id, gray: t.gray, core: t.core });
+    const r = await call({ type: 'count', id: ph.id, gray: t.gray, core: t.core, nymphs: t.nymphs });
     Object.assign(ph, { autoCount: r.count, points: r.points, cands: r.cands, feats: r.feats, featureNames: r.featureNames,
-      debrisRemoved: r.debrisRemoved, backlit: r.backlit, version: r.version, ms: r.ms, gray: t.gray, core: t.core, status: 'done' });
+      debrisRemoved: r.debrisRemoved, backlit: r.backlit, version: r.version, ms: r.ms, gray: t.gray, core: t.core, nymphs: t.nymphs, status: 'done' });
     applyFix(ph);
     savePhoto(ph);
     renderList();
@@ -373,7 +374,7 @@ document.documentElement.lang = 'en';
   function recountAll() {
     for (const ph of [selected, ...photos.filter(p => p !== selected)]) {
       if (!ph || !ph.dish) continue;
-      enqueue(async () => { if (ph.gray === thresholds.gray && ph.core === thresholds.core) return; try { await countPhoto(ph); } catch (err) { ph.status = 'error: ' + err.message; renderList(); } setBusy(''); });
+      enqueue(async () => { if (ph.gray === thresholds.gray && ph.core === thresholds.core && !!ph.nymphs === thresholds.nymphs) return; try { await countPhoto(ph); } catch (err) { ph.status = 'error: ' + err.message; renderList(); } setBusy(''); });
     }
   }
 
@@ -413,7 +414,8 @@ document.documentElement.lang = 'en';
   // Dots on the counted insects; while correcting also struck-out, hand-added and dropped candidates.
   // r is the insect's radius on screen; the dot is a third of it.
   function strokeMarks(ctx, ph, at, r, width, dpr, clip) {
-    const layers = [[ph.fix.kept || ph.points, '#22e57f', 'dot']];
+    const kept = ph.fix.kept || ph.points;
+    const layers = [[kept.filter(c => !c[4]), '#22e57f', 'dot'], [kept.filter(c => c[4]), NYMPH_COLOR, 'dot']];
     if (fixing && ph.cands) {
       layers.unshift([ph.cands.filter(c => c[3] && !ph.fix.restored.includes(c)), 'rgba(220,228,222,.9)', 'hollow']);
       layers.push([ph.fix.struck, '#ff4d4d', 'dot'], [ph.fix.added, '#3db8ff', 'dot']);
@@ -430,6 +432,9 @@ document.documentElement.lang = 'en';
       else { ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.lineWidth = 2.5 * dpr; ctx.stroke(); ctx.strokeStyle = color; ctx.lineWidth = 1.2 * dpr; ctx.stroke(); }
     }
   }
+
+  const NYMPH_COLOR = '#ffb020';
+  const nymphsKept = ph => (ph.fix.kept || ph.points).filter(c => c[4]).length;
 
   // ---------- corrections: struck-out and added points, kept in analysed-photo pixels ----------
   let fixing = false;
@@ -502,7 +507,7 @@ document.documentElement.lang = 'en';
         gray: p.gray, core: p.core, auto_count: p.autoCount, count: p.count,
         removed: p.fix.removed, added: p.fix.added, added_without_candidate: p.fix.added.length - p.fix.restored.length,
         candidates: p.cands.map((c, i) => ({ x: +c[0].toFixed(1), y: +c[1].toFixed(1), p_insect: +c[2].toFixed(4),
-          dropped: ['', 'straw', 'classifier'][c[3]] || null, label: p.fix.labels[i], features: p.feats[i] })) })) };
+          dropped: ['', 'straw', 'classifier'][c[3]] || null, kind: c[4] ? 'nymph' : 'adult', label: p.fix.labels[i], features: p.feats[i] })) })) };
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
     offer(`orius_corrections_${stamp}.json`, new Blob([JSON.stringify(out)], { type: 'application/json' }));
   };
@@ -593,6 +598,7 @@ document.documentElement.lang = 'en';
     if (ph.backlit) parts.push('backlit: dish wall ignored');
     const blur = focusWarning(ph.focus);
     if (blur) parts.push(blur);
+    if (ph.nymphs) parts.push(`${nymphsKept(ph)} nymphs included`);
     if (ph.debrisRemoved) parts.push(`${ph.debrisRemoved} straw hits dropped`);
     if (ph.count !== ph.autoCount || ph.fix.removed.length) parts.push(`corrected by hand from ${ph.autoCount}`);
     parts.push(`${(ph.ms / 1000).toFixed(1)} s`);
@@ -647,9 +653,10 @@ document.documentElement.lang = 'en';
   stage.addEventListener('drop', e => { for (const f of e.dataTransfer.files) if (f.type.startsWith('image/')) addPhoto(f, f.name); });
 
   // ---------- thresholds ----------
-  function setThresholds(g, c, recount) {
-    thresholds = { gray: g, core: c };
+  function setThresholds(g, c, recount, nymphs = thresholds.nymphs) {
+    thresholds = { gray: g, core: c, nymphs };
     $('gray').value = g; $('core').value = c; $('grayOut').textContent = g; $('coreOut').textContent = c;
+    $('nymphToggle').checked = nymphs;
     try { localStorage.setItem('oriusThresholds', JSON.stringify(thresholds)); } catch {}
     liveHistory = [];
     if (recount) { clearTimeout(setThresholds.t); setThresholds.t = setTimeout(recountAll, 250); }
@@ -658,6 +665,7 @@ document.documentElement.lang = 'en';
   $('core').oninput = () => setThresholds(+$('gray').value, +$('core').value, true);
   $('presetArducam').onclick = () => setThresholds(90, 65, true);
   $('presetNotebook').onclick = () => setThresholds(75, 50, true);
+  $('nymphToggle').onchange = () => setThresholds(thresholds.gray, thresholds.core, true, $('nymphToggle').checked);
   setThresholds(thresholds.gray, thresholds.core, false);
 
   // ---------- saving ----------
@@ -679,15 +687,17 @@ document.documentElement.lang = 'en';
     const c = document.createElement('canvas'); c.width = ph.prepW; c.height = ph.prepH;
     const ctx = c.getContext('2d');
     ctx.drawImage(ph.bmp, 0, 0, ph.prepW, ph.prepH);
-    const m = Math.max(2.5, 3.5 * ph.dish[2] / REF_R);
-    ctx.beginPath();
-    for (const [x, y] of [...(ph.fix.kept || ph.points), ...ph.fix.added]) { ctx.moveTo(x + m, y); ctx.arc(x, y, m, 0, Math.PI * 2); }
-    ctx.fillStyle = '#00ff87'; ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
+    const m = Math.max(2.5, 3.5 * ph.dish[2] / REF_R), kept = ph.fix.kept || ph.points;
+    for (const [pts, color] of [[[...kept.filter(c => !c[4]), ...ph.fix.added], '#00ff87'], [kept.filter(c => c[4]), NYMPH_COLOR]]) {
+      ctx.beginPath();
+      for (const [x, y] of pts) { ctx.moveTo(x + m, y); ctx.arc(x, y, m, 0, Math.PI * 2); }
+      ctx.fillStyle = color; ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
+    }
     ctx.strokeStyle = '#ff4fd8'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(ph.dish[0], ph.dish[1], ph.dish[2], 0, Math.PI * 2); ctx.stroke();
     const size = Math.max(24, Math.round(ph.prepH / 30));
     ctx.font = `600 ${size}px "Instrument Sans", Arial, sans-serif`;
     ctx.lineWidth = Math.max(3, size / 8); ctx.strokeStyle = '#000'; ctx.fillStyle = '#00ff87';
-    const label = `${ph.count} Orius   gray < ${ph.gray}, core < ${ph.core}   ${ph.name}`;
+    const label = `${ph.count} Orius${ph.nymphs ? ` (${nymphsKept(ph)} nymphs)` : ''}   gray < ${ph.gray}, core < ${ph.core}   ${ph.name}`;
     ctx.strokeText(label, 20, 20 + size); ctx.fillText(label, 20, 20 + size);
     return new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
   }
@@ -697,9 +707,9 @@ document.documentElement.lang = 'en';
   function csvBlob() {
     const done = photos.filter(p => p.status === 'done');
     const esc = v => /[",\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : v;
-    const rows = [['photo', 'orius', 'gray_threshold', 'core_threshold', 'width', 'height', 'analysed_width', 'dish_x', 'dish_y', 'dish_r', 'straw_hits_dropped', 'counter_count', 'struck_by_hand', 'added_by_hand', 'example']];
+    const rows = [['photo', 'orius', 'gray_threshold', 'core_threshold', 'width', 'height', 'analysed_width', 'dish_x', 'dish_y', 'dish_r', 'straw_hits_dropped', 'counter_count', 'struck_by_hand', 'added_by_hand', 'nymphs', 'example']];
     for (const p of done) rows.push([p.name, p.count, p.gray, p.core, p.origW, p.origH, p.prepW, p.dish[0], p.dish[1], p.dish[2], p.debrisRemoved,
-      p.autoCount, p.fix.struck.length, p.fix.added.length, p.example ? 'yes' : '']);
+      p.autoCount, p.fix.struck.length, p.fix.added.length, p.nymphs ? nymphsKept(p) : 'not counted', p.example ? 'yes' : '']);
     return new Blob([rows.map(r => r.map(esc).join(',')).join('\n') + '\n'], { type: 'text/csv' });
   }
 
@@ -809,8 +819,8 @@ document.documentElement.lang = 'en';
     liveBusy = true;
     try {
       const f = frameRGB(1600), t = { ...thresholds };
-      const r = await call({ type: 'live', rgb: f.rgb.buffer, width: f.width, height: f.height, gray: t.gray, core: t.core }, [f.rgb.buffer]);
-      if (t.gray === thresholds.gray && t.core === thresholds.core) {
+      const r = await call({ type: 'live', rgb: f.rgb.buffer, width: f.width, height: f.height, gray: t.gray, core: t.core, nymphs: t.nymphs }, [f.rgb.buffer]);
+      if (t.gray === thresholds.gray && t.core === thresholds.core && t.nymphs === thresholds.nymphs) {
         liveHistory = [...liveHistory, r.count].slice(-5);
         const med = [...liveHistory].sort((a, b) => a - b)[liveHistory.length >> 1];
         $('liveMeta').textContent = `Live ≈ ${med} (median of ${liveHistory.length}, last ${r.count})`;
@@ -829,9 +839,11 @@ document.documentElement.lang = 'en';
     if (!$('liveToggle').checked || !video.videoWidth) return;
     const k = Math.min(live.width / video.videoWidth, live.height / video.videoHeight);
     const w = video.videoWidth * k, h = video.videoHeight * k, ox = (live.width - w) / 2, oy = (live.height - h) / 2;
-    ctx.beginPath();
-    for (const [x, y] of livePoints) { const X = ox + x * w, Y = oy + y * h; ctx.moveTo(X + 2.5 * dpr, Y); ctx.arc(X, Y, 2.5 * dpr, 0, Math.PI * 2); }
-    ctx.fillStyle = '#22e57f'; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.75)'; ctx.lineWidth = dpr; ctx.stroke();
+    for (const [nymph, color] of [[0, '#22e57f'], [1, NYMPH_COLOR]]) {
+      ctx.beginPath();
+      for (const [x, y, n] of livePoints) if (!n === !nymph) { const X = ox + x * w, Y = oy + y * h; ctx.moveTo(X + 2.5 * dpr, Y); ctx.arc(X, Y, 2.5 * dpr, 0, Math.PI * 2); }
+      ctx.fillStyle = color; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.75)'; ctx.lineWidth = dpr; ctx.stroke();
+    }
   }
 
   $('cameraBtn').onclick = () => startCamera();

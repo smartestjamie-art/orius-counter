@@ -20,6 +20,9 @@
   // Backlit dishes: the dark dish-wall ring is cut out of the mask (photobooth_count.BACKLIT).
   const BACKLIT = { sectors: 120, search: [0.95, 1.03], lip_scan: [0.80, 0.94, 0.02], lip_min_sectors: 80, wall_ratio: 0.983, min_dip: 50, min_ring_sectors: 0.5, half_width: 4, keep_dark: 50,
     near: 6, open_radius: 2, split: { seed_depth: 5, peak_min_distance: 10, segment_min_area: 60 } };
+  // Nymphs, counted on request: warm blobs that are not black adults (photobooth_count.NYMPH).
+  const NYMPH = { sigma: 1.2, max_blue: 140, min_tan: 35, min_red: 60, max_sat: 0.75, neutral: 15, gap: 2, max_overlap: 0.4,
+    inside: 0.95, clump: 1.3, tan: { hue: [0.38, 0.75], min_red: 140, min_area: 40 }, brown: { hue: 0.05, max_red: 140, min_area: 55 } };
 
   // Python's round(): halves go to the even neighbour.
   function pyRound(x) {
@@ -780,6 +783,72 @@
     return found;
   }
 
+  // ---------- nymphs ----------
+
+  /** photobooth_count.find_nymphs, worked inside the dish's bounding square: [{x, y, area, kind: 'nymph'}]. */
+  function findNymphs(rgb, W, H, grayThreshold, cx, cy, r, adults) {
+    const N = NYMPH, s = r / REFERENCE_RADIUS, m = Math.ceil(r) + 8;
+    const x0 = Math.max(0, cx - m), y0 = Math.max(0, cy - m), w = Math.min(W, cx + m + 1) - x0, h = Math.min(H, cy + m + 1) - y0;
+    const ch = [0, 1, 2].map(c => {
+      const a = new Float64Array(w * h);
+      for (let y = 0; y < h; y++) for (let x = 0, j = ((y + y0) * W + x0) * 3 + c; x < w; x++, j += 3) a[y * w + x] = rgb[j];
+      return gaussianFilter(a, w, h, N.sigma);
+    });
+    const [R, G, B] = ch, n = w * h, box = [0, h, 0, w];
+    const cross = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]];
+    let mask = new Uint8Array(n), black = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      mask[i] = B[i] < N.max_blue && R[i] - B[i] > N.min_tan && R[i] >= N.min_red ? 1 : 0;
+      const y = (i / w) | 0, x = i - y * w;
+      black[i] = rgb[((y + y0) * W + x + x0) * 3] < grayThreshold && R[i] - B[i] < N.neutral ? 1 : 0;
+    }
+    mask = morph(morph(mask, w, h, cross, true, box), w, h, cross, false, box);
+    const at = d => { const x = pyRound(d.x) - x0, y = pyRound(d.y) - y0; return x >= 0 && y >= 0 && x < w && y < h ? y * w + x : -1; };
+    for (const d of adults) { const i = at(d); if (i >= 0) black[i] = 1; }
+    for (let k = 0; k < N.gap; k++) black = morph(black, w, h, cross, false, box);
+    const { labels, n: nl } = label4(mask, w, h);
+    const area = new Float64Array(nl + 1), sr = new Float64Array(nl + 1), sg = new Float64Array(nl + 1), sb = new Float64Array(nl + 1);
+    const ov = new Float64Array(nl + 1), sx = new Float64Array(nl + 1), sy = new Float64Array(nl + 1);
+    for (let i = 0; i < n; i++) {
+      const v = labels[i]; if (!v) continue;
+      const y = (i / w) | 0, x = i - y * w;
+      area[v]++; sr[v] += R[i]; sg[v] += G[i]; sb[v] += B[i]; ov[v] += black[i]; sx[v] += x; sy[v] += y;
+    }
+    const onAdult = new Uint8Array(nl + 1);
+    for (const d of adults) { const i = at(d); if (i >= 0 && labels[i]) onAdult[labels[i]] = 1; }
+    const T = N.tan, Bn = N.brown, keep = new Int32Array(nl + 1), blobs = [];
+    for (let v = 1; v <= nl; v++) {
+      const a = area[v], mr = sr[v] / a, mg = sg[v] / a, mb = sb[v] / a;
+      const hue = (mg - mb) / Math.max(mr - mb, 1e-9), sat = (mr - mb) / Math.max(mr, 1e-9);
+      const tan = hue >= T.hue[0] && hue <= T.hue[1] && mr >= T.min_red && a >= T.min_area * s * s;
+      const brown = hue >= Bn.hue && hue <= T.hue[1] && mr <= Bn.max_red && a >= Bn.min_area * s * s;
+      if (!((tan || brown) && sat <= N.max_sat && ov[v] / a <= N.max_overlap && !onAdult[v])) continue;
+      const x = sx[v] / a + x0, y = sy[v] / a + y0;
+      if (Math.hypot(x - cx, y - cy) < N.inside * r) { keep[v] = blobs.length + 1; blobs.push({ x, y, a, xx: 0, yy: 0, xy: 0 }); }
+    }
+    if (!blobs.length) return [];
+    for (let i = 0; i < n; i++) {
+      const k = keep[labels[i]]; if (!k) continue;
+      const b = blobs[k - 1], y = (i / w) | 0, dx = i - y * w + x0 - b.x, dy = y + y0 - b.y;
+      b.xx += dx * dx; b.yy += dy * dy; b.xy += dx * dy;
+    }
+    const single = N.clump * medianOf(blobs.map(b => b.a)), found = [];
+    for (const b of blobs) {
+      const k = Math.max(1, pyRound(b.a / single)), d = Math.max(b.a - 1, 1);
+      // long axis of the pixel covariance (np.cov, ddof 1)
+      const a = b.xx / d, c = b.yy / d, o = b.xy / d, l = (a + c) / 2 + Math.sqrt(((a - c) / 2) ** 2 + o * o);
+      let ex = o, ey = l - a;
+      if (Math.abs(ex) + Math.abs(ey) < 1e-12) { ex = l - c; ey = o; }
+      if (Math.abs(ex) + Math.abs(ey) < 1e-12) { ex = 0; ey = 1; }
+      const norm = Math.hypot(ex, ey), step = 4 * Math.sqrt(Math.max(l, 0)) / k;
+      for (let j = 0; j < k; j++) {
+        const t = (j - (k - 1) / 2) * step;
+        found.push({ x: b.x + t * ex / norm, y: b.y + t * ey / norm, area: b.a / k, kind: 'nymph' });
+      }
+    }
+    return found;
+  }
+
   // ---------- pipeline ----------
 
   /** Find the dish and bring the photo to the notebook's scale. rgb: Uint8Array, 3 bytes per pixel. */
@@ -823,11 +892,13 @@
     const debris = debrisBlobs(det, prep.rgb, w, s, ring ? -Infinity : DEBRIS.min_brownness);
     // The classifier only runs on front-lit photos: on backlit ones it removed as many insects as false hits.
     for (const d of candidates) d.dropped = debris.has(d.blob) ? 'straw' : model && !ring && d.p_insect < model.threshold ? 'classifier' : null;
-    const detections = candidates.filter(d => !d.dropped);
-    return { count: detections.length, detections, candidates, parameters: p, components: det.components.length, backlit: !!ring,
+    const adults = candidates.filter(d => !d.dropped);
+    const nymphs = opts.nymphs ? findNymphs(prep.rgb, w, h, p.gray_threshold, cx, cy, r, adults) : [];
+    const detections = adults.concat(nymphs);
+    return { count: detections.length, adults: adults.length, nymphs: nymphs.length, detections, candidates, parameters: p, components: det.components.length, backlit: !!ring,
       debrisFragments: debris.size, debrisRemoved: candidates.filter(d => d.dropped === 'straw').length,
       classifierRemoved: candidates.filter(d => d.dropped === 'classifier').length };
   }
 
-  return { VERSION, REFERENCE_RADIUS, SPLIT, DEBRIS, BACKLIT, prepare, count, findDish, luma, resizeRGB, gaussianFilter, pyRound };
+  return { VERSION, REFERENCE_RADIUS, SPLIT, DEBRIS, BACKLIT, NYMPH, prepare, count, findDish, luma, resizeRGB, gaussianFilter, pyRound };
 });
