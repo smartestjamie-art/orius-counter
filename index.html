@@ -161,6 +161,7 @@
           <button class="small" id="focusSweepBtn">Find sharpest focus</button>
           <button class="small" id="focusAutoBtn">Autofocus</button>
         </div>
+        <label class="check" id="stackRow" hidden><input type="checkbox" id="stackToggle"> Focus stack: 5 shots around this focus, merged</label>
         <div class="row" id="focusConnect" hidden><button class="small" id="focusConnectBtn">Connect focus helper</button></div>
         <p class="note" id="focusNote"></p>
         <label class="check"><input type="checkbox" id="liveToggle" checked> Live count on the preview</label>
@@ -856,9 +857,56 @@ document.documentElement.lang = 'en';
   $('liveToggle').onchange = () => { liveHistory = []; livePoints = []; drawLive(); $('liveMeta').textContent = ''; };
   // Capture: watch the full-resolution frames for 3 s and keep the one whose weakest band is sharpest.
   let capturing = false;
+  $('stackToggle').onchange = () => { try { localStorage.setItem('oriusStack', $('stackToggle').checked ? '1' : '0'); } catch {} };
+
+  // Focus stack: shots at the current focus and STACK.step either side, merged by the worker (sharpest region wins).
+  // Each position keeps the sharper of two frames, in case one was taken while the lens still moved.
+  const STACK = { offsets: [-2, -1, 0, 1, 2], step: 16, settle: 450 };
+  async function stackCapture() {
+    const h = await helper(); if (!h) return null;
+    const centre = h.auto ? h.value : +$('focus').value, W = video.videoWidth, H = video.videoHeight;
+    const radius = Math.max(2, Math.round(W / 600));
+    let n = 0;
+    for (const o of STACK.offsets) {
+      if (!stream) break;
+      const v = Math.min(h.max, Math.max(h.min, centre + o * STACK.step));
+      await helper(`?value=${v}`);
+      await new Promise(r => setTimeout(r, STACK.settle));
+      let best = null, bestScore = -1;
+      for (let k = 0; k < 2; k++) {
+        const c = document.createElement('canvas'); c.width = W; c.height = H;
+        c.getContext('2d').drawImage(video, 0, 0);
+        const sc = Math.min(...sharpness(c, W, H));
+        if (sc > bestScore) { best = c; bestScore = sc; }
+        await new Promise(r => setTimeout(r, 120));
+      }
+      const rgba = best.getContext('2d').getImageData(0, 0, W, H).data;
+      $('captureBtn').textContent = `Focus stack… shot ${++n} of ${STACK.offsets.length} (focus ${v})`;
+      await call({ type: 'stackAdd', rgba: rgba.buffer, width: W, height: H, radius }, [rgba.buffer]);
+    }
+    await helper(`?value=${centre}`);
+    $('focus').value = centre; $('focusOut').textContent = centre;
+    $('captureBtn').textContent = 'Merging…';
+    const r = await call({ type: 'stackEnd' });
+    const c = document.createElement('canvas'); c.width = r.width; c.height = r.height;
+    c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(r.rgba), r.width, r.height), 0, 0);
+    return c;
+  }
+
   $('captureBtn').onclick = async () => {
     if (!video.videoWidth || capturing) return;
     capturing = true; $('captureBtn').disabled = true;
+    if (focusConnected && $('stackToggle').checked) {
+      let c = null;
+      try { c = await stackCapture(); } catch (err) { $('focusNote').textContent = 'Focus stack failed: ' + err.message; }
+      $('captureBtn').textContent = 'Capture & count'; $('captureBtn').disabled = false; capturing = false;
+      if (!c) return;
+      const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.95));
+      const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
+      stopCamera();
+      addPhoto(blob, `orius_${stamp}_stack.jpg`);
+      return;
+    }
     const W = video.videoWidth, H = video.videoHeight, t0 = performance.now();
     let best = null, bestScore = -1, frames = 0;
     while (performance.now() - t0 < 3000 && stream) {
@@ -928,7 +976,8 @@ document.documentElement.lang = 'en';
       return false;
     }
     const f = $('focus'); f.min = h.min; f.max = h.max; f.step = 1; f.value = h.value;
-    $('focusOut').textContent = h.auto ? 'auto' : h.value; $('focusRow').hidden = $('focusBtns').hidden = false;
+    $('focusOut').textContent = h.auto ? 'auto' : h.value; $('focusRow').hidden = $('focusBtns').hidden = $('stackRow').hidden = false;
+    try { $('stackToggle').checked = localStorage.getItem('oriusStack') === '1'; } catch {}
     f.oninput = () => {
       $('focusOut').textContent = f.value;
       clearTimeout(f.t); f.t = setTimeout(() => helper(`?value=${f.value}`), 60);
