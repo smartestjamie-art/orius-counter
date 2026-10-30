@@ -77,7 +77,11 @@
   .stage { position: relative; background: var(--stage); border-radius: 10px; overflow: hidden; aspect-ratio: 4 / 3;
     width: min(100%, calc((100dvh - 90px) * 4 / 3)); margin-inline: auto; touch-action: manipulation; }
   .stage:fullscreen { width: 100vw; height: 100vh; aspect-ratio: auto; border-radius: 0; }
-  .stage .fullBtn { position: absolute; right: 10px; top: 10px; z-index: 2; padding: 6px 10px; font-size: 13px; opacity: .85; }
+  .stage .zoomBar { position: absolute; right: 10px; top: 10px; z-index: 2; display: flex; gap: 6px; align-items: center; }
+  .stage .zoomBar button { padding: 6px 10px; font-size: 13px; opacity: .88; min-width: 32px; }
+  .stage .zoomBar span { font: 600 12px/1 var(--font-body); color: #fff; background: rgba(0,0,0,.55); padding: 5px 7px; border-radius: 6px; }
+  .stage .zoomBar span:empty { display: none; }
+  .stage canvas#view { touch-action: pan-x pan-y; }
   .stage canvas, .stage video { position: absolute; inset: 0; width: 100%; height: 100%; }
   .stage video { object-fit: contain; }
   .stage.drag { outline: 3px dashed var(--accent); outline-offset: -6px; }
@@ -141,9 +145,15 @@
         <div class="empty" id="empty" hidden>Drop dish photos here, or press <b>&nbsp;Add photos…</b></div>
         <span class="tag" id="exampleTag" hidden>EXAMPLE PHOTO</span>
         <div class="busy" id="busy" hidden></div>
-        <button class="fullBtn" id="fullBtn" title="Show the photo full screen (Esc to leave)">Full screen</button>
+        <div class="zoomBar">
+          <span id="zoomLevel"></span>
+          <button id="zoomOut" title="Zoom out" aria-label="Zoom out">−</button>
+          <button id="zoomIn" title="Zoom in" aria-label="Zoom in">+</button>
+          <button id="zoomFit" title="Show the whole photo">Fit</button>
+          <button id="fullBtn" title="Show the photo full screen (Esc to leave)">Full screen</button>
+        </div>
       </div>
-      <p class="hint" id="stageHint">Click the photo to zoom in 3×, click again to zoom out. Drop photos anywhere on it to add them.</p>
+      <p class="hint" id="stageHint">Scroll or pinch to zoom, drag to move around, click to zoom 3× or back. Drop photos anywhere on it to add them.</p>
     </section>
 
     <aside>
@@ -403,9 +413,11 @@ document.documentElement.lang = 'en';
     if (!ph || !ph.bmp) return;
     let k = Math.min(view.width / ph.origW, view.height / ph.origH);
     let ox = (view.width - ph.origW * k) / 2, oy = (view.height - ph.origH * k) / 2;
-    if (zoom) { // zoom 3x around the clicked point of the photo
-      k *= 3; ox = view.width / 2 - zoom.x * k; oy = view.height / 2 - zoom.y * k;
+    if (zoom) { // zoom.s times the fitted size, photo point (zoom.x, zoom.y) at the centre of the stage
+      k *= zoom.s; ox = view.width / 2 - zoom.x * k; oy = view.height / 2 - zoom.y * k;
     }
+    $('zoomFit').disabled = $('zoomOut').disabled = !zoom;
+    $('zoomLevel').textContent = zoom ? `${zoom.s < 10 ? zoom.s.toFixed(1) : Math.round(zoom.s)}×` : '';
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(ph.bmp, ox, oy, ph.origW * k, ph.origH * k);
     viewT = { k, ox, oy };
@@ -491,7 +503,7 @@ document.documentElement.lang = 'en';
     $('stage').classList.toggle('correcting', fixing); $('fixKey').hidden = !fixing;
     $('stageHint').textContent = fixing
       ? 'Click a dot that is not an Orius to strike it out, or a missed Orius to add it. Click a mark again to undo. Shift-click zooms in or out.'
-      : 'Click the photo to zoom in 3×, click again to zoom out. Drop photos anywhere on it to add them.';
+      : 'Scroll or pinch to zoom, drag to move around, click to zoom 3× or back. Drop photos anywhere on it to add them.';
     const ph = selected, f = ph && ph.fix;
     $('fixNote').textContent = !f || !ph.cands ? '' : f.removed.length || f.added.length
       ? `This photo: ${f.struck.length} struck out, ${f.added.length} added (counter found ${ph.autoCount}).` : 'No corrections on this photo.';
@@ -532,12 +544,62 @@ document.documentElement.lang = 'en';
       return;
     }
     if (zoom) { zoom = null; draw(); return; }
-    const rect = view.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
-    const k = Math.min(view.width / ph.origW, view.height / ph.origH);
-    const ox = (view.width - ph.origW * k) / 2, oy = (view.height - ph.origH * k) / 2;
-    zoom = { x: ((e.clientX - rect.left) * dpr - ox) / k, y: ((e.clientY - rect.top) * dpr - oy) / k };
-    draw();
+    zoomAt(e.clientX, e.clientY, 3);
   });
+
+  // Free zoom: wheel or trackpad pinch around the pointer, drag to pan, two-finger pinch on touch screens.
+  const ZOOM_MAX = 40;
+  function zoomAt(clientX, clientY, factor) {
+    const ph = selected; if (!ph || !ph.bmp || !viewT) return;
+    const r = view.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    const sx = (clientX - r.left) * dpr, sy = (clientY - r.top) * dpr;
+    const px = (sx - viewT.ox) / viewT.k, py = (sy - viewT.oy) / viewT.k; // photo point under the pointer stays put
+    const fit = Math.min(view.width / ph.origW, view.height / ph.origH);
+    const s = Math.min(ZOOM_MAX, Math.max(1, (zoom ? zoom.s : 1) * factor));
+    if (s <= 1.001) { zoom = null; draw(); return; }
+    const k = fit * s;
+    zoom = { s, x: clampTo((view.width / 2 - sx) / k + px, ph.origW), y: clampTo((view.height / 2 - sy) / k + py, ph.origH) };
+    draw();
+  }
+  const clampTo = (v, max) => Math.min(max, Math.max(0, v));
+  function panBy(dxCss, dyCss) {
+    const ph = selected; if (!zoom || !ph || !viewT) return;
+    const dpr = window.devicePixelRatio || 1;
+    zoom.x = clampTo(zoom.x - dxCss * dpr / viewT.k, ph.origW); zoom.y = clampTo(zoom.y - dyCss * dpr / viewT.k, ph.origH);
+    draw();
+  }
+  view.addEventListener('wheel', e => {
+    if (!selected || !selected.bmp) return;
+    e.preventDefault();
+    // trackpad pinch arrives as a wheel event with ctrlKey; its deltas are small
+    zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)));
+  }, { passive: false });
+  const pointers = new Map();
+  let dragged = false, pinchDist = 0;
+  view.addEventListener('pointerdown', e => {
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); dragged = false;
+    if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinchDist = Math.hypot(a.x - b.x, a.y - b.y); }
+  });
+  view.addEventListener('pointermove', e => {
+    const prev = pointers.get(e.pointerId); if (!prev) return;
+    const cur = { x: e.clientX, y: e.clientY };
+    if (pointers.size === 2) {
+      pointers.set(e.pointerId, cur);
+      const [a, b] = [...pointers.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinchDist > 0) zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, d / pinchDist);
+      pinchDist = d; dragged = true; return;
+    }
+    if (!dragged && Math.hypot(cur.x - prev.x, cur.y - prev.y) < 4) return;
+    if (zoom) { if (!dragged) view.setPointerCapture(e.pointerId); dragged = true; panBy(cur.x - prev.x, cur.y - prev.y); }
+    pointers.set(e.pointerId, cur);
+  });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(t => view.addEventListener(t, e => { pointers.delete(e.pointerId); if (pointers.size < 2) pinchDist = 0; }));
+  // a drag or pinch is not a click
+  view.addEventListener('click', e => { if (dragged) { e.stopImmediatePropagation(); dragged = false; } }, true);
+  const zoomCentre = f => { const r = view.getBoundingClientRect(); zoomAt(r.left + r.width / 2, r.top + r.height / 2, f); };
+  $('zoomIn').onclick = e => { e.stopPropagation(); zoomCentre(2); };
+  $('zoomOut').onclick = e => { e.stopPropagation(); zoomCentre(0.5); };
+  $('zoomFit').onclick = e => { e.stopPropagation(); zoom = null; draw(); };
   // ---------- magnifier: the area under the pointer, enlarged in the side panel ----------
   let viewT = null, magAt = null; // viewT: how the photo sits on the stage; magAt: point in photo/frame pixels
   const mag = $('mag');
