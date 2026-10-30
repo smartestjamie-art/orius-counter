@@ -9,7 +9,7 @@
 
   // Counter version, stored with every result so a photo keeps the count it was given. Change it whenever
   // detection, splitting or the debris model (debris_model.js) changes.
-  const VERSION = '2026-10-30b';
+  const VERSION = '2026-10-30c';
   const REFERENCE_RADIUS = 699; // outer dish rim in the notebook's photo
   const DEFAULTS = { background_sigma: 12, gray_threshold: 75, contrast_threshold: 32, component_min_area: 55,
     core_threshold: 50, core_min_pixels: 25 };
@@ -23,8 +23,8 @@
   // Long thin blobs (sticks, also curved) on front-lit photos (photobooth_count.STICK).
   const STICK = { min_length: 60, max_width: 8.3 };
   // Nymphs, counted on request: warm blobs that are not black adults (photobooth_count.NYMPH).
-  const NYMPH = { sigma: 1.2, max_blue: 140, min_tan: 35, min_red: 60, max_sat: 0.75, neutral: 15, gap: 2, max_overlap: 0.4,
-    inside: 0.95, clump: 1.3, tan: { hue: [0.38, 0.75], min_red: 140, min_area: 40 }, brown: { hue: 0.05, max_red: 140, min_area: 55 } };
+  const NYMPH = { level: 215, sigma: 1.2, max_blue: 140, min_tan: 35, min_tan_frontlit: 100, min_red: 60, max_sat: 0.75, neutral: 15, gap: 2, max_overlap: 0.4,
+    inside: 0.95, clump: 1.3, max_clump: 6, tan: { hue: [0.38, 0.8], min_red: 140, min_area: 40 }, brown: { hue: 0.05, max_red: 140, min_area: 55 } };
 
   // Python's round(): halves go to the even neighbour.
   function pyRound(x) {
@@ -804,19 +804,30 @@
   // ---------- nymphs ----------
 
   /** photobooth_count.find_nymphs, worked inside the dish's bounding square: [{x, y, area, kind: 'nymph'}]. */
-  function findNymphs(rgb, W, H, grayThreshold, cx, cy, r, adults) {
+  function findNymphs(rgb, W, H, grayThreshold, cx, cy, r, adults, backlit) {
+    const minTan = backlit ? NYMPH.min_tan : NYMPH.min_tan_frontlit;
     const N = NYMPH, s = r / REFERENCE_RADIUS, m = Math.ceil(r) + 8;
     const x0 = Math.max(0, cx - m), y0 = Math.max(0, cy - m), w = Math.min(W, cx + m + 1) - x0, h = Math.min(H, cy + m + 1) - y0;
+    // Scale each channel so the dish background (75th percentile inside 0.9 r) reads N.level.
     const ch = [0, 1, 2].map(c => {
-      const a = new Float64Array(w * h);
-      for (let y = 0; y < h; y++) for (let x = 0, j = ((y + y0) * W + x0) * 3 + c; x < w; x++, j += 3) a[y * w + x] = rgb[j];
-      return gaussianFilter(a, w, h, N.sigma);
+      const a = new Float64Array(w * h), hist = new Float64Array(256);
+      let n = 0;
+      for (let y = 0; y < h; y++) for (let x = 0, j = ((y + y0) * W + x0) * 3 + c; x < w; x++, j += 3) {
+        a[y * w + x] = rgb[j];
+        if (Math.hypot(x + x0 - cx, y + y0 - cy) < 0.9 * r) { hist[rgb[j]]++; n++; }
+      }
+      const k = Math.floor(0.75 * (n - 1)) + 1;
+      let level = 0;
+      for (let acc = 0; level < 256; level++) { acc += hist[level]; if (acc >= k) break; }
+      const g = gaussianFilter(a, w, h, N.sigma), f = N.level / Math.max(1, level);
+      for (let i = 0; i < g.length; i++) g[i] *= f;
+      return g;
     });
     const [R, G, B] = ch, n = w * h, box = [0, h, 0, w];
     const cross = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]];
     let mask = new Uint8Array(n), black = new Uint8Array(n);
     for (let i = 0; i < n; i++) {
-      mask[i] = B[i] < N.max_blue && R[i] - B[i] > N.min_tan && R[i] >= N.min_red ? 1 : 0;
+      mask[i] = B[i] < N.max_blue && R[i] - B[i] > minTan && R[i] >= N.min_red ? 1 : 0;
       const y = (i / w) | 0, x = i - y * w;
       black[i] = rgb[((y + y0) * W + x + x0) * 3] < grayThreshold && R[i] - B[i] < N.neutral ? 1 : 0;
     }
@@ -853,6 +864,7 @@
     const single = N.clump * medianOf(blobs.map(b => b.a)), found = [];
     for (const b of blobs) {
       const k = Math.max(1, pyRound(b.a / single)), d = Math.max(b.a - 1, 1);
+      if (k > N.max_clump) continue; // food or egg-mass patch
       // long axis of the pixel covariance (np.cov, ddof 1)
       const a = b.xx / d, c = b.yy / d, o = b.xy / d, l = (a + c) / 2 + Math.sqrt(((a - c) / 2) ** 2 + o * o);
       let ex = o, ey = l - a;
@@ -913,7 +925,7 @@
     // The classifier only runs on front-lit photos: on backlit ones it removed as many insects as false hits.
     for (const d of candidates) d.dropped = debris.has(d.blob) ? 'straw' : model && !ring && d.p_insect < model.threshold ? 'classifier' : null;
     const adults = candidates.filter(d => !d.dropped);
-    const nymphs = opts.nymphs ? findNymphs(prep.rgb, w, h, p.gray_threshold, cx, cy, r, adults) : [];
+    const nymphs = opts.nymphs ? findNymphs(prep.rgb, w, h, p.gray_threshold, cx, cy, r, adults, !!ring) : [];
     const detections = adults.concat(nymphs);
     return { count: detections.length, adults: adults.length, nymphs: nymphs.length, detections, candidates, parameters: p, components: det.components.length, backlit: !!ring,
       debrisFragments: debris.size, debrisRemoved: candidates.filter(d => d.dropped === 'straw').length,
