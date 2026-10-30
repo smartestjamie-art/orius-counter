@@ -1102,7 +1102,7 @@ document.documentElement.lang = 'en';
       const a = (await nextFrame(), grabCanvas()), b = (await nextFrame(), grabCanvas());
       frames.push(a.score >= b.score ? a.canvas : b.canvas);
     }
-    $('captureBtn').textContent = 'Merging…';
+    $('captureBtn').textContent = 'Aligning and merging…';
     for (const c of frames) {
       const rgba = c.getContext('2d').getImageData(0, 0, W, H).data;
       await call({ type: 'stackAdd', rgba: rgba.buffer, width: W, height: H, radius }, [rgba.buffer]);
@@ -1110,7 +1110,11 @@ document.documentElement.lang = 'en';
     await helper(`?value=${centre}`);
     $('focus').value = centre; $('focusOut').textContent = centre;
     $('captureBtn').textContent = 'Merging…';
-    const r = await call({ type: 'stackEnd' });
+    // the middle shot is the reference the others are aligned to (focus breathing changes the magnification)
+    const r = await call({ type: 'stackEnd', ref: frames.length >> 1 });
+    if (r.shifts && r.shifts.length > 1)
+      $('focusNote').textContent += ` Aligned to shot ${(frames.length >> 1) + 1}: ` +
+        r.shifts.map((a, i) => `shot ${i + 1} ×${a.scale.toFixed(4)}${a.dx || a.dy ? ` (${a.dx}, ${a.dy} px)` : ''}`).join(', ') + '.';
     const c = document.createElement('canvas'); c.width = r.width; c.height = r.height;
     c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(r.rgba), r.width, r.height), 0, 0);
     return c;
