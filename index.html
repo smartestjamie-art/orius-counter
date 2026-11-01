@@ -243,7 +243,7 @@
           <button class="small" id="presetNotebook">Notebook 75 / 50</button>
         </div>
         <label class="check"><input type="checkbox" id="nymphToggle"> Also count nymphs (pale and red-brown, amber dots)</label>
-        <p class="note">Off: black adults only. The nymph setting applies to photos added from now on; Gray and Dark core recount every photo.</p>
+        <p class="note">Off: black adults only. The nymph setting applies to photos added from now on and to Recount; Gray and Dark core recount every photo.</p>
       </div>
 
       <div class="panel">
@@ -745,10 +745,10 @@ document.documentElement.lang = 'en';
       const del = document.createElement('td'); del.style.textAlign = 'right';
       const b = document.createElement('button'); b.className = 'small'; b.textContent = 'Remove'; b.setAttribute('aria-label', `Remove ${ph.name}`);
       b.onclick = ev => { ev.stopPropagation(); removePhoto(ph); };
-      // Recount: run the latest counter on this photo again (corrections are kept and re-matched)
+      // Recount: run the latest counter on this photo again with the current nymph setting (corrections are kept)
       const rc = document.createElement('button'); rc.className = 'small'; rc.textContent = 'Recount'; rc.setAttribute('aria-label', `Recount ${ph.name}`);
       rc.disabled = !ph.dish || ph.example;
-      rc.onclick = ev => { ev.stopPropagation(); enqueue(async () => { try { await countPhoto(ph); } catch (err) { ph.status = 'error: ' + err.message; renderList(); } setBusy(''); }); };
+      rc.onclick = ev => { ev.stopPropagation(); ph.nymphs = thresholds.nymphs; enqueue(async () => { try { await countPhoto(ph); } catch (err) { ph.status = 'error: ' + err.message; renderList(); } setBusy(''); }); };
       // Retake: open the camera; the next capture replaces this photo and reuses its sample ID
       const rt = document.createElement('button'); rt.className = 'small'; rt.textContent = 'Retake'; rt.setAttribute('aria-label', `Retake ${ph.name}`);
       rt.hidden = $('cameraBtn').hidden || ph.example;
@@ -763,7 +763,7 @@ document.documentElement.lang = 'en';
 
   $('recountBtn').onclick = () => {
     const ph = selected; if (!ph || ph.status !== 'done') return;
-    $('recountBtn').hidden = true;
+    $('recountBtn').hidden = true; ph.nymphs = thresholds.nymphs;
     enqueue(async () => { try { await countPhoto(ph); } catch (err) { ph.status = 'error: ' + err.message; renderList(); } setBusy(''); });
   };
 
