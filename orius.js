@@ -9,7 +9,7 @@
 
   // Counter version, stored with every result so a photo keeps the count it was given. Change it whenever
   // detection, splitting or the debris model (debris_model.js) changes.
-  const VERSION = '2026-10-30k';
+  const VERSION = '2026-11-01';
   const REFERENCE_RADIUS = 699; // outer dish rim in the notebook's photo
   const DEFAULTS = { background_sigma: 12, gray_threshold: 75, contrast_threshold: 32, component_min_area: 55,
     core_threshold: 50, core_min_pixels: 25 };
@@ -18,7 +18,7 @@
     seed_sigma: 1.0, seed_depth: 3 };
   const DEBRIS = { min_length: 70, min_solidity: 0.75, min_brownness: 0.35 };
   // Backlit dishes: the dark dish-wall ring is cut out of the mask (photobooth_count.BACKLIT).
-  const BACKLIT = { sectors: 120, search: [0.95, 1.03], lip_scan: [0.80, 0.94, 0.02], lip_min_sectors: 80, wall_ratio: 0.983, min_dip: 50, min_ring_sectors: 0.5, half_width: 4, max_half: 16, count_radius: 1.02, keep_dark: 50, keep_off: 25, keep_grow: 10,
+  const BACKLIT = { sectors: 120, search: [0.95, 1.03], lip_scan: [0.80, 0.94, 0.02], lip_min_sectors: 80, wall_ratio: 0.983, min_dip: 50, min_ring_sectors: 0.5, half_width: 4, max_half: 16, count_radius: 1.02, one_adult: 1.2, keep_dark: 50, keep_off: 25, keep_grow: 10,
     near: 6, open_radius: 2, split: { seed_depth: 5, peak_min_distance: 10, segment_min_area: 60 } };
   // One insect split in two, on front-lit photos (photobooth_count.MERGE).
   const MERGE = { min_solidity: 0.83, max_length: 42, max_width: 18 };
@@ -854,6 +854,27 @@
     return [...groups.values()].flat();
   }
 
+  /** photobooth_count.merge_by_area: a component split into several dots but no bigger than factor x the photo's
+   *  median one-dot component is one insect (legs and wing edges cut it apart). */
+  function mergeByArea(det, cands, W, factor) {
+    const groups = new Map();
+    for (const d of cands) { if (!groups.has(d.blob)) groups.set(d.blob, []); groups.get(d.blob).push(d); }
+    const comp = new Map(det.components.map(c => [c.blob, c]));
+    const single = [...groups].filter(([, g]) => g.length === 1).map(([b]) => comp.get(b).area);
+    if (single.length < 20) return cands;
+    const limit = factor * medianOf(single.slice()), out = [];
+    for (const [b, g] of groups) {
+      const c = comp.get(b);
+      if (g.length > 1 && c.area <= limit) {
+        let n = 0, sx = 0, sy = 0;
+        for (let y = c.r0; y < c.r1; y++) for (let x = c.c0; x < c.c1; x++) if (det.labels[y * W + x] === b) { n++; sx += x; sy += y; }
+        const keep = g.reduce((a, d) => d.area > a.area ? d : a);
+        out.push({ ...keep, x: sx / n, y: sy / n, area: n, core_pixels: g.reduce((t, d) => t + d.core_pixels, 0) });
+      } else out.push(...g);
+    }
+    return out;
+  }
+
   /** photobooth_count.stick_blobs: width = 4 x mean distance to the edge, length = area / width. */
   function stickBlobs(det, W, H, s) {
     const found = new Set(), pad = 3;
@@ -1027,8 +1048,9 @@
       : opts.model || (typeof ORIUS_DEBRIS_MODEL !== 'undefined' ? ORIUS_DEBRIS_MODEL : null);
     // candidates: every split segment, with why it was dropped (straw rule first, then the classifier) or null
     let candidates = resplit(det, red, w, s, prep.rgb, model, ring ? { ...SPLIT, ...BACKLIT.split } : SPLIT);
-    // Front-lit only: packed backlit insects lose real pairs to it.
+    // Front-lit only: packed backlit insects lose real pairs to it. Backlit: by area against this photo's typical insect.
     if (!ring) candidates = mergeSingle(det, candidates, w, s);
+    else if (BACKLIT.one_adult) candidates = mergeByArea(det, candidates, w, BACKLIT.one_adult);
     const debris = debrisBlobs(det, prep.rgb, w, s, ring ? -Infinity : DEBRIS.min_brownness);
     // Backlit sticks mostly lie against insects, which would go with them.
     if (!ring) for (const b of stickBlobs(det, w, h, s)) debris.add(b);
