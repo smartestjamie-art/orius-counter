@@ -9,14 +9,14 @@
 
   // Counter version, stored with every result so a photo keeps the count it was given. Change it whenever
   // detection, splitting or the debris model (debris_model.js) changes.
-  const VERSION = '2026-11-02';
+  const VERSION = '2026-11-02b';
   const REFERENCE_RADIUS = 699; // outer dish rim in the notebook's photo
   const DEFAULTS = { background_sigma: 12, gray_threshold: 75, contrast_threshold: 32, component_min_area: 55,
     core_threshold: 50, core_min_pixels: 25 };
   // Cluster splitting and debris filter at the reference scale, as in photobooth_count.py.
   const SPLIT = { split_min_area: 220, peak_min_distance: 8, peak_min_height: 2.0, segment_min_area: 40,
     seed_sigma: 1.0, seed_depth: 3 };
-  const DEBRIS = { min_length: 70, min_solidity: 0.75, min_brownness: 0.35, min_aspect: 3 };
+  const DEBRIS = { min_length: 70, min_solidity: 0.75, min_brownness: 0.35, min_aspect: 3, sliver_length: 60, sliver_aspect: 7 };
   // Backlit dishes: the dark dish-wall ring is cut out of the mask (photobooth_count.BACKLIT).
   const BACKLIT = { sectors: 120, search: [0.95, 1.03], lip_scan: [0.80, 0.94, 0.02], lip_min_sectors: 80, wall_ratio: 0.983, min_dip: 50, min_ring_sectors: 0.5, half_width: 4, max_half: 16, count_radius: 1.02, one_adult: 1.2, thin: { radius: 3, min_length: 50, max_width: 6 }, keep_dark: 50, keep_off: 25, keep_grow: 10,
     near: 6, open_radius: 2, split: { seed_depth: 5, peak_min_distance: 10, segment_min_area: 60 } };
@@ -794,6 +794,8 @@
       for (let i = 0; i < n; i++) { const dx = xs[i] - mx, dy = ys[i] - my; a += dx * dx; b += dx * dy; d += dy * dy; }
       a /= n; b /= n; d /= n;
       const root = Math.sqrt(((a - d) / 2) ** 2 + b * b), major = 4 * Math.sqrt((a + d) / 2 + root), minor = 4 * Math.sqrt(Math.max(0, (a + d) / 2 - root));
+      // slivers: long and very thin are debris whatever their colour or solidity
+      if (major >= DEBRIS.sliver_length * s && major >= DEBRIS.sliver_aspect * Math.max(minor, 1e-9)) { found.add(c.blob); continue; }
       if (major < DEBRIS.min_length * s || major < DEBRIS.min_aspect * Math.max(minor, 1e-9)) continue;
       // solidity: pixels / pixels whose centres lie in the hull of the pixels' edge midpoints (skimage convex_image)
       const corners = [];
