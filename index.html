@@ -221,7 +221,12 @@
           corrections, and they can be exported to retrain the counter.</p>
         <div class="key" id="fixKey" hidden>
           <span><i style="background:#22e57f"></i>counted</span><span><i style="background:#ff4d4d"></i>struck out</span>
-          <span><i style="background:#3db8ff"></i>added by hand</span><span><i style="border-color:#c9d3cc"></i>dropped as debris</span>
+          <span><i style="background:#3db8ff"></i>added by hand</span><span id="keyAddedNymph"><i style="background:#c77dff"></i>nymph added by hand</span><span><i style="border-color:#c9d3cc"></i>dropped as debris</span>
+        </div>
+        <div class="row" id="fixTools" hidden>
+          <label class="check"><input type="radio" name="fixTool" value="adult" checked> Adults</label>
+          <label class="check"><input type="radio" name="fixTool" value="nymph"> Nymphs</label>
+          <label class="check"><input type="radio" name="fixTool" value="switch"> Switch adult ↔ nymph</label>
         </div>
         <p class="note" id="fixNote"></p>
         <div class="row">
@@ -457,8 +462,8 @@ document.documentElement.lang = 'en';
     const layers = [[kept.filter(c => !c[4]), '#22e57f', 'dot'], [kept.filter(c => c[4]), NYMPH_COLOR, 'dot']];
     if (fixing && ph.cands) {
       layers.unshift([ph.cands.filter(c => c[3] && !ph.fix.restored.includes(c)), 'rgba(220,228,222,.9)', 'hollow']);
-      layers.push([ph.fix.struck, '#ff4d4d', 'dot'], [ph.fix.added, '#3db8ff', 'dot']);
-    } else if (ph.fix.added.length) layers.push([ph.fix.added, '#22e57f', 'dot']);
+      layers.push([ph.fix.struck, '#ff4d4d', 'dot'], [ph.fix.added.filter(a => !a[2]), '#3db8ff', 'dot'], [ph.fix.added.filter(a => a[2]), '#c77dff', 'dot']);
+    } else if (ph.fix.added.length) layers.push([ph.fix.added.filter(a => !a[2]), '#22e57f', 'dot'], [ph.fix.added.filter(a => a[2]), NYMPH_COLOR, 'dot']);
     const rd = dot || Math.max(2.2 * dpr, r / 3);
     for (const [pts, color, kind] of layers) {
       ctx.beginPath();
@@ -473,8 +478,9 @@ document.documentElement.lang = 'en';
   }
 
   const NYMPH_COLOR = '#ffb020';
-  const nymphsKept = ph => (ph.fix.kept || ph.points).filter(c => c[4]).length;
-  const adultsKept = ph => ph.count - nymphsKept(ph); // dots added by hand count as adults
+  const nymphsKept = ph => (ph.fix.kept || ph.points).filter(c => c[4]).length + ph.fix.added.filter(a => a[2]).length;
+  const adultsKept = ph => ph.count - nymphsKept(ph);
+  const hasFix = f => f.removed.length || f.added.length || (f.retyped || []).length;
   const ratio = ph => `${nymphsKept(ph)} : ${adultsKept(ph)}${adultsKept(ph) ? ` (${(nymphsKept(ph) / adultsKept(ph)).toFixed(2)})` : ''}`;
 
   // ---------- corrections: struck-out and added points, kept in analysed-photo pixels ----------
@@ -489,27 +495,38 @@ document.documentElement.lang = 'en';
   // Match the corrections to this count's candidates: fix.kept (counted), struck, restored (dropped but added back),
   // labels (1 insect, 0 not, null unknown: dropped and not touched).
   function applyFix(ph) {
-    const f = ph.fix; f.removed = f.removed || []; f.added = f.added || [];
+    const f = ph.fix; f.removed = f.removed || []; f.added = f.added || []; f.retyped = f.retyped || [];
     if (!ph.cands) return;
     const R = markRadius(ph), kept = ph.cands.filter(c => !c[3]), dropped = ph.cands.filter(c => c[3]);
-    const struck = new Set(), restored = [];
+    const struck = new Set(), restored = [], flipped = new Set();
     for (const [x, y] of f.removed) { const i = nearest(kept, x, y, R); if (i >= 0) struck.add(kept[i]); }
     for (const [x, y] of f.added) { const i = nearest(dropped, x, y, R); if (i >= 0) restored.push(dropped[i]); }
-    f.kept = kept.filter(c => !struck.has(c));
+    for (const [x, y] of f.retyped) { const i = nearest(kept, x, y, R); if (i >= 0) flipped.add(kept[i]); }
+    // retyped: counted dots switched by hand between adult and nymph (a copy with the kind flipped)
+    f.kept = kept.filter(c => !struck.has(c)).map(c => flipped.has(c) ? [c[0], c[1], c[2], c[3], c[4] ? 0 : 1] : c);
     f.struck = [...struck]; f.restored = restored;
     f.labels = ph.cands.map(c => struck.has(c) ? 0 : !c[3] || restored.includes(c) ? 1 : null);
+    f.kinds = ph.cands.map(c => struck.has(c) ? null : (flipped.has(c) ? !c[4] : !!c[4]) ? 'nymph' : 'adult');
     ph.count = f.kept.length + f.added.length;
   }
 
-  function fixAt(ph, x, y) {
+  // tool: 'adult' or 'nymph' strike out counted dots and add missed ones of that kind; 'switch' flips a dot's kind
+  function fixAt(ph, x, y, tool = 'adult') {
     const f = ph.fix, R = markRadius(ph);
     let i;
-    if ((i = nearest(f.added, x, y, R)) >= 0) f.added.splice(i, 1);           // undo an added point
+    if (tool === 'switch') {
+      if ((i = nearest(f.added, x, y, R)) >= 0) { const a = f.added[i]; f.added[i] = a[2] ? a.slice(0, 2) : [a[0], a[1], 1]; }
+      else if ((i = nearest(f.retyped, x, y, R)) >= 0) f.retyped.splice(i, 1);   // switch back
+      else if ((i = nearest(f.kept, x, y, R)) >= 0) f.retyped.push(f.kept[i].slice(0, 2));
+      else return;
+    }
+    else if ((i = nearest(f.added, x, y, R)) >= 0) f.added.splice(i, 1);           // undo an added point
     else if ((i = nearest(f.removed, x, y, R)) >= 0) f.removed.splice(i, 1);  // undo a strike
     else if ((i = nearest(f.kept, x, y, R)) >= 0) f.removed.push(f.kept[i].slice(0, 2));
     else {
       const dropped = ph.cands.filter(c => c[3]), j = nearest(dropped, x, y, R);
-      f.added.push(j >= 0 ? dropped[j].slice(0, 2) : [x, y]);
+      const p = j >= 0 ? dropped[j].slice(0, 2) : [x, y];
+      f.added.push(tool === 'nymph' ? [...p, 1] : p);
     }
     applyFix(ph); savePhoto(ph);
     draw(); renderCount(); renderList(); renderFix();
@@ -519,13 +536,16 @@ document.documentElement.lang = 'en';
   function renderFix() {
     $('fixBtn').setAttribute('aria-pressed', fixing); $('fixBtn').textContent = fixing ? 'Done correcting' : 'Correct mistakes';
     $('stage').classList.toggle('correcting', fixing); $('fixKey').hidden = !fixing;
+    const nym = !!(selected && selected.nymphs);
+    $('fixTools').hidden = !fixing || !nym; $('keyAddedNymph').hidden = !nym;
+    if (!nym) document.querySelector('input[name="fixTool"][value="adult"]').checked = true;
     $('stageHint').textContent = fixing
       ? 'Click a dot that is not an Orius to strike it out, or a missed Orius to add it. Click a mark again to undo. Shift-click zooms in or out.'
       : 'Pinch (or Ctrl + scroll) to zoom, scroll or drag to move around, click to zoom 3× or back. Drop photos on it to add them.';
     const ph = selected, f = ph && ph.fix;
-    $('fixNote').textContent = !f || !ph.cands ? '' : f.removed.length || f.added.length
-      ? `This photo: ${f.struck.length} struck out, ${f.added.length} added (counter found ${ph.autoCount}).` : 'No corrections on this photo.';
-    const n = photos.filter(p => p.fix.removed.length || p.fix.added.length).length;
+    $('fixNote').textContent = !f || !ph.cands ? '' : hasFix(f)
+      ? `This photo: ${f.struck.length} struck out, ${f.added.length} added${f.retyped.length ? `, ${f.retyped.length} switched adult ↔ nymph` : ''} (counter found ${ph.autoCount}).` : 'No corrections on this photo.';
+    const n = photos.filter(p => hasFix(p.fix)).length;
     $('fixExport').disabled = !n; $('fixExport').textContent = n ? `Export corrections (${n} photo${n > 1 ? 's' : ''})` : 'Export corrections';
   }
 
@@ -535,20 +555,20 @@ document.documentElement.lang = 'en';
     renderFix(); draw();
   };
   $('fixClear').onclick = () => {
-    const ph = selected; if (!ph || !(ph.fix.removed.length || ph.fix.added.length)) return;
-    ph.fix.removed = []; ph.fix.added = []; applyFix(ph); savePhoto(ph);
+    const ph = selected; if (!ph || !hasFix(ph.fix)) return;
+    ph.fix.removed = []; ph.fix.added = []; ph.fix.retyped = []; applyFix(ph); savePhoto(ph);
     draw(); renderCount(); renderList(); renderFix(); autoSave(ph);
   };
   // One JSON file: for every corrected photo, each candidate's classifier inputs and its label. No pixels.
   $('fixExport').onclick = () => {
-    const done = photos.filter(p => p.cands && (p.fix.removed.length || p.fix.added.length));
+    const done = photos.filter(p => p.cands && hasFix(p.fix));
     if (!done.length) return;
     const out = { format: 'orius-corrections-1', exported: new Date().toISOString(), features: done[0].featureNames,
       photos: done.map(p => ({ name: p.name, width: p.origW, height: p.origH, analysed_width: p.prepW, dish: p.dish,
         gray: p.gray, core: p.core, auto_count: p.autoCount, count: p.count,
-        removed: p.fix.removed, added: p.fix.added, added_without_candidate: p.fix.added.length - p.fix.restored.length,
+        removed: p.fix.removed, added: p.fix.added, retyped: p.fix.retyped, added_without_candidate: p.fix.added.length - p.fix.restored.length,
         candidates: p.cands.map((c, i) => ({ x: +c[0].toFixed(1), y: +c[1].toFixed(1), p_insect: +c[2].toFixed(4),
-          dropped: ['', 'straw', 'classifier'][c[3]] || null, kind: c[4] ? 'nymph' : 'adult', label: p.fix.labels[i], features: p.feats[i] })) })) };
+          dropped: ['', 'straw', 'classifier'][c[3]] || null, kind: c[4] ? 'nymph' : 'adult', kind_by_hand: p.fix.kinds[i], label: p.fix.labels[i], features: p.feats[i] })) })) };
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
     offer(`orius_corrections_${stamp}.json`, new Blob([JSON.stringify(out)], { type: 'application/json' }));
   };
@@ -558,7 +578,7 @@ document.documentElement.lang = 'en';
     if (fixing && !e.shiftKey && ph.cands) {
       const p = stagePoint(e); if (!p) return;
       const s = ph.origW / ph.prepW;
-      fixAt(ph, p.x / s, p.y / s);
+      fixAt(ph, p.x / s, p.y / s, ph.nymphs ? document.querySelector('input[name="fixTool"]:checked').value : 'adult');
       return;
     }
     if (zoom) { zoom = null; draw(); return; }
@@ -732,7 +752,7 @@ document.documentElement.lang = 'en';
     if (blur) parts.push(blur);
     parts.push(ph.nymphs ? `nymphs : adults = ${ratio(ph)} · ${ph.count} in all` : 'adults only');
     if (ph.debrisRemoved) parts.push(`${ph.debrisRemoved} straw hits dropped`);
-    if (ph.count !== ph.autoCount || ph.fix.removed.length) parts.push(`corrected by hand from ${ph.autoCount}`);
+    if (ph.count !== ph.autoCount || hasFix(ph.fix)) parts.push(`corrected by hand from ${ph.autoCount}`);
     parts.push(`${(ph.ms / 1000).toFixed(1)} s`);
     const old = !ph.example && counterVersion && ph.version !== counterVersion;
     if (old) parts.push(`counted with an older counter${ph.version ? ` (${ph.version})` : ''}`);
@@ -833,7 +853,7 @@ document.documentElement.lang = 'en';
     const ctx = c.getContext('2d');
     ctx.drawImage(ph.bmp, 0, 0, ph.prepW, ph.prepH);
     const m = Math.max(2.5, 3.5 * ph.dish[2] / REF_R), kept = ph.fix.kept || ph.points;
-    for (const [pts, color] of [[[...kept.filter(c => !c[4]), ...ph.fix.added], '#00ff87'], [kept.filter(c => c[4]), NYMPH_COLOR]]) {
+    for (const [pts, color] of [[[...kept.filter(c => !c[4]), ...ph.fix.added.filter(a => !a[2])], '#00ff87'], [[...kept.filter(c => c[4]), ...ph.fix.added.filter(a => a[2])], NYMPH_COLOR]]) {
       ctx.beginPath();
       for (const [x, y] of pts) { ctx.moveTo(x + m, y); ctx.arc(x, y, m, 0, Math.PI * 2); }
       ctx.fillStyle = color; ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
