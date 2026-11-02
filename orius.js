@@ -9,16 +9,16 @@
 
   // Counter version, stored with every result so a photo keeps the count it was given. Change it whenever
   // detection, splitting or the debris model (debris_model.js) changes.
-  const VERSION = '2026-11-01';
+  const VERSION = '2026-11-02';
   const REFERENCE_RADIUS = 699; // outer dish rim in the notebook's photo
   const DEFAULTS = { background_sigma: 12, gray_threshold: 75, contrast_threshold: 32, component_min_area: 55,
     core_threshold: 50, core_min_pixels: 25 };
   // Cluster splitting and debris filter at the reference scale, as in photobooth_count.py.
   const SPLIT = { split_min_area: 220, peak_min_distance: 8, peak_min_height: 2.0, segment_min_area: 40,
     seed_sigma: 1.0, seed_depth: 3 };
-  const DEBRIS = { min_length: 70, min_solidity: 0.75, min_brownness: 0.35 };
+  const DEBRIS = { min_length: 70, min_solidity: 0.75, min_brownness: 0.35, min_aspect: 3 };
   // Backlit dishes: the dark dish-wall ring is cut out of the mask (photobooth_count.BACKLIT).
-  const BACKLIT = { sectors: 120, search: [0.95, 1.03], lip_scan: [0.80, 0.94, 0.02], lip_min_sectors: 80, wall_ratio: 0.983, min_dip: 50, min_ring_sectors: 0.5, half_width: 4, max_half: 16, count_radius: 1.02, one_adult: 1.2, keep_dark: 50, keep_off: 25, keep_grow: 10,
+  const BACKLIT = { sectors: 120, search: [0.95, 1.03], lip_scan: [0.80, 0.94, 0.02], lip_min_sectors: 80, wall_ratio: 0.983, min_dip: 50, min_ring_sectors: 0.5, half_width: 4, max_half: 16, count_radius: 1.02, one_adult: 1.2, thin: { radius: 3, min_length: 50, max_width: 6 }, keep_dark: 50, keep_off: 25, keep_grow: 10,
     near: 6, open_radius: 2, split: { seed_depth: 5, peak_min_distance: 10, segment_min_area: 60 } };
   // One insect split in two, on front-lit photos (photobooth_count.MERGE).
   const MERGE = { min_solidity: 0.83, max_length: 42, max_width: 18 };
@@ -793,8 +793,8 @@
       let a = 0, b = 0, d = 0;
       for (let i = 0; i < n; i++) { const dx = xs[i] - mx, dy = ys[i] - my; a += dx * dx; b += dx * dy; d += dy * dy; }
       a /= n; b /= n; d /= n;
-      const major = 4 * Math.sqrt((a + d) / 2 + Math.sqrt(((a - d) / 2) ** 2 + b * b));
-      if (major < DEBRIS.min_length * s) continue;
+      const root = Math.sqrt(((a - d) / 2) ** 2 + b * b), major = 4 * Math.sqrt((a + d) / 2 + root), minor = 4 * Math.sqrt(Math.max(0, (a + d) / 2 - root));
+      if (major < DEBRIS.min_length * s || major < DEBRIS.min_aspect * Math.max(minor, 1e-9)) continue;
       // solidity: pixels / pixels whose centres lie in the hull of the pixels' edge midpoints (skimage convex_image)
       const corners = [];
       for (let i = 0; i < n; i++) for (const [ox, oy] of [[-0.5, 0], [0.5, 0], [0, -0.5], [0, 0.5]]) corners.push([xs[i] + ox, ys[i] + oy]);
@@ -852,6 +852,54 @@
       }
     }
     return [...groups.values()].flat();
+  }
+
+  /** photobooth_count.cut_thin: long thin pieces (sticks, slivers) cut out of the mask, also where they touch insects. */
+  function cutThin(det, gray, w, h, s, T) {
+    const p = det.parameters, n = w * h, R = Math.max(1, pyRound(T.radius * s)), disk = [];
+    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) if (Math.sqrt(dx * dx + dy * dy) <= R) disk.push([dx, dy]);
+    const m = Math.ceil(p.radius_x) + R + 4, cx = p.center_x, cy = p.center_y;
+    const box = [Math.max(0, cy - m), Math.min(h, cy + m + 1), Math.max(0, cx - m), Math.min(w, cx + m + 1)];
+    const opened = morph(morph(det.filled, w, h, disk, true, box), w, h, disk, false, box);
+    const thin = new Uint8Array(n);
+    for (let i = 0; i < n; i++) thin[i] = det.filled[i] && !opened[i] ? 1 : 0;
+    // 8-connected pieces
+    const lab = new Int32Array(n), queue = new Int32Array(n), cut = [false];
+    let k = 0;
+    for (let i = 0; i < n; i++) {
+      if (!thin[i] || lab[i]) continue;
+      k++; let head = 0, tail = 0, cnt = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+      lab[i] = k; queue[tail++] = i;
+      while (head < tail) {
+        const j = queue[head++], x = j % w, y = (j - x) / w;
+        cnt++; sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const X = x + dx, Y = y + dy;
+          if (X < 0 || Y < 0 || X >= w || Y >= h) continue;
+          const q = Y * w + X; if (thin[q] && !lab[q]) { lab[q] = k; queue[tail++] = q; }
+        }
+      }
+      let ok = false;
+      if (cnt >= 3) { // np.cov, ddof 1
+        const mx = sx / cnt, my = sy / cnt, a = (sxx - cnt * mx * mx) / (cnt - 1), c = (syy - cnt * my * my) / (cnt - 1), o = (sxy - cnt * mx * my) / (cnt - 1);
+        const len = 4 * Math.sqrt(Math.max(0, (a + c) / 2 + Math.sqrt(((a - c) / 2) ** 2 + o * o)));
+        ok = len >= T.min_length * s && cnt / Math.max(len, 1e-9) <= T.max_width * s;
+      }
+      cut.push(ok);
+    }
+    if (!cut.some(Boolean)) return det;
+    const filled = new Uint8Array(n);
+    for (let i = 0; i < n; i++) filled[i] = det.filled[i] && !(lab[i] && cut[lab[i]]) ? 1 : 0;
+    const { labels, n: nlab, info } = label4(filled, w, h);
+    const core = new Int32Array(nlab + 1);
+    for (let i = 0; i < n; i++) if (labels[i] && filled[i] && gray[i] < p.core_threshold) core[labels[i]]++;
+    const components = [];
+    for (let id = 1; id <= nlab; id++) {
+      const c = info[id];
+      if (c.area < p.component_min_area || core[id] < p.core_min_pixels) continue;
+      components.push({ blob: id, area: c.area, r0: Math.max(0, c.minr - 2), r1: Math.min(h, c.maxr + 3), c0: Math.max(0, c.minc - 2), c1: Math.min(w, c.maxc + 3) });
+    }
+    return { ...det, filled, labels, components };
   }
 
   /** photobooth_count.merge_by_area: a component split into several dots but no bigger than factor x the photo's
@@ -1044,6 +1092,7 @@
     if (ring && BACKLIT.count_radius !== 1) p.radius_x = p.radius_y = r * BACKLIT.count_radius;
     let det = detect(red, w, h, p);
     if (ring) det = removeWall(det, ring, red, w, h);
+    if (ring && BACKLIT.thin) det = cutThin(det, red, w, h, s, BACKLIT.thin);
     const model = opts.classifier === false ? null
       : opts.model || (typeof ORIUS_DEBRIS_MODEL !== 'undefined' ? ORIUS_DEBRIS_MODEL : null);
     // candidates: every split segment, with why it was dropped (straw rule first, then the classifier) or null
