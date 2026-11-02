@@ -9,7 +9,7 @@
 
   // Counter version, stored with every result so a photo keeps the count it was given. Change it whenever
   // detection, splitting or the debris model (debris_model.js) changes.
-  const VERSION = '2026-11-02b';
+  const VERSION = '2026-11-02c';
   const REFERENCE_RADIUS = 699; // outer dish rim in the notebook's photo
   const DEFAULTS = { background_sigma: 12, gray_threshold: 75, contrast_threshold: 32, component_min_area: 55,
     core_threshold: 50, core_min_pixels: 25 };
@@ -28,7 +28,7 @@
   const NYMPH = { level: 215, sigma: 1.2, local_sigma: 10, min_tan: 30, min_hue: 0.5, max_blue: 160, min_area: 15, max_sat: 0.9,
     clump: 1.1, max_clump: 6, wall: { sectors: 120, step: 4, outer: 0.75, coverage: 0.33, run: 3, filled: 6 },
     backlit: { min_hue: 0.35, wall: null }, min_red: 60, neutral: 15, gap: 2, max_overlap: 0.4, inside: 0.95,
-    tan: { max_hue: 0.8, min_red: 140, min_area: 40 }, brown: { hue: 0.05, max_red: 140, min_area: 55 } };
+    tan: { max_hue: 0.8, min_red: 140, min_area: 40 }, brown: { hue: 0.05, max_red: 140, min_area: 55 }, min_dot: 30 };
 
   // Python's round(): halves go to the even neighbour.
   function pyRound(x) {
@@ -1042,6 +1042,7 @@
     for (const b of blobs) {
       const k = Math.max(1, pyRound(b.a / single)), d = Math.max(b.a - 1, 1);
       if (k > N.max_clump) continue; // food or egg-mass patch
+      if (b.a / k < N.min_dot * s * s) continue; // pale specks, egg shells, bits of moult
       // long axis of the pixel covariance (np.cov, ddof 1)
       const a = b.xx / d, c = b.yy / d, o = b.xy / d, l = (a + c) / 2 + Math.sqrt(((a - c) / 2) ** 2 + o * o);
       let ex = o, ey = l - a;
