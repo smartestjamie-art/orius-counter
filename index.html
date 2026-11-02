@@ -101,6 +101,7 @@
   .count { display: flex; align-items: baseline; gap: 10px; }
   .count .n { font: 600 64px/1 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--accent); }
   .count .unit { font-size: 18px; font-weight: 600; }
+  .count .n.nymph { font-size: 40px; color: var(--amber); }
   .meta { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; margin-top: 8px; }
   .slider { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: center; margin: 10px 0; }
   .slider input { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
@@ -159,7 +160,8 @@
 
     <aside>
       <div class="panel" aria-live="polite">
-        <div class="count"><span class="n" id="countN">–</span><span class="unit">Orius</span></div>
+        <div class="count"><span class="n" id="countN">–</span><span class="unit" id="countUnit">Orius</span></div>
+        <div class="count" id="nymphRow" hidden><span class="n nymph" id="nymphN"></span><span class="unit">nymphs</span></div>
         <div class="meta" id="countMeta">Counting the example photo…</div>
         <div class="row" style="margin-top:8px"><button class="small" id="recountBtn" hidden>Recount with the latest counter</button></div>
       </div>
@@ -472,6 +474,8 @@ document.documentElement.lang = 'en';
 
   const NYMPH_COLOR = '#ffb020';
   const nymphsKept = ph => (ph.fix.kept || ph.points).filter(c => c[4]).length;
+  const adultsKept = ph => ph.count - nymphsKept(ph); // dots added by hand count as adults
+  const ratio = ph => `${nymphsKept(ph)} : ${adultsKept(ph)}${adultsKept(ph) ? ` (${(nymphsKept(ph) / adultsKept(ph)).toFixed(2)})` : ''}`;
 
   // ---------- corrections: struck-out and added points, kept in analysed-photo pixels ----------
   let fixing = false;
@@ -714,15 +718,19 @@ document.documentElement.lang = 'en';
   function renderCount() {
     const ph = selected;
     $('recountBtn').hidden = true;
+    const split = !!(ph && ph.count != null && ph.nymphs);
+    $('nymphRow').hidden = !split;
+    $('countUnit').textContent = split ? 'adults' : 'Orius';
     if (!ph) { $('countN').textContent = '–'; $('countMeta').textContent = 'Add a photo to count.'; return; }
-    $('countN').textContent = ph.count == null ? '…' : ph.count;
+    $('countN').textContent = ph.count == null ? '…' : split ? adultsKept(ph) : ph.count;
+    if (split) $('nymphN').textContent = nymphsKept(ph);
     if (ph.count == null) { $('countMeta').textContent = `${ph.name}: ${ph.status}`; return; }
     const parts = [`${ph.example ? 'Example: ' : ''}${ph.name}`, `${ph.origW} × ${ph.origH}`,
       `gray < ${ph.gray}, dark core < ${ph.core}`];
     if (ph.backlit) parts.push('backlit: dish wall ignored');
     const blur = focusWarning(ph.focus);
     if (blur) parts.push(blur);
-    parts.push(ph.nymphs ? `${nymphsKept(ph)} nymphs included` : 'adults only');
+    parts.push(ph.nymphs ? `nymphs : adults = ${ratio(ph)} · ${ph.count} in all` : 'adults only');
     if (ph.debrisRemoved) parts.push(`${ph.debrisRemoved} straw hits dropped`);
     if (ph.count !== ph.autoCount || ph.fix.removed.length) parts.push(`corrected by hand from ${ph.autoCount}`);
     parts.push(`${(ph.ms / 1000).toFixed(1)} s`);
@@ -741,7 +749,7 @@ document.documentElement.lang = 'en';
       const size = document.createElement('td'); size.className = 'status'; size.textContent = ph.origW ? `${ph.origW} × ${ph.origH}` : '';
       const thr = document.createElement('td'); thr.className = 'status'; thr.textContent = ph.gray ? `${ph.gray} / ${ph.core}` : '';
       const n = document.createElement('td'); n.className = 'num';
-      if (ph.status === 'done') n.textContent = ph.count; else { const st = document.createElement('span'); st.className = 'status'; st.textContent = ph.status; n.append(st); }
+      if (ph.status === 'done') n.textContent = ph.nymphs ? `${adultsKept(ph)} + ${nymphsKept(ph)} nymphs` : ph.count; else { const st = document.createElement('span'); st.className = 'status'; st.textContent = ph.status; n.append(st); }
       const del = document.createElement('td'); del.style.textAlign = 'right';
       const b = document.createElement('button'); b.className = 'small'; b.textContent = 'Remove'; b.setAttribute('aria-label', `Remove ${ph.name}`);
       b.onclick = ev => { ev.stopPropagation(); removePhoto(ph); };
@@ -834,7 +842,7 @@ document.documentElement.lang = 'en';
     const size = Math.max(24, Math.round(ph.prepH / 30));
     ctx.font = `600 ${size}px "Instrument Sans", Arial, sans-serif`;
     ctx.lineWidth = Math.max(3, size / 8); ctx.strokeStyle = '#000'; ctx.fillStyle = '#00ff87';
-    const label = `${ph.count} Orius${ph.nymphs ? ` (${nymphsKept(ph)} nymphs)` : ''}   gray < ${ph.gray}, core < ${ph.core}   ${ph.name}`;
+    const label = `${ph.nymphs ? `${nymphsKept(ph)} nymphs : ${adultsKept(ph)} adults (${ph.count} in all)` : `${ph.count} Orius`}   gray < ${ph.gray}, core < ${ph.core}   ${ph.name}`;
     ctx.strokeText(label, 20, 20 + size); ctx.fillText(label, 20, 20 + size);
     return new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
   }
@@ -844,9 +852,10 @@ document.documentElement.lang = 'en';
   function csvBlob() {
     const done = photos.filter(p => p.status === 'done');
     const esc = v => /[",\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : v;
-    const rows = [['photo', 'orius', 'gray_threshold', 'core_threshold', 'width', 'height', 'analysed_width', 'dish_x', 'dish_y', 'dish_r', 'straw_hits_dropped', 'counter_count', 'struck_by_hand', 'added_by_hand', 'nymphs', 'example']];
-    for (const p of done) rows.push([p.name, p.count, p.gray, p.core, p.origW, p.origH, p.prepW, p.dish[0], p.dish[1], p.dish[2], p.debrisRemoved,
-      p.autoCount, p.fix.struck.length, p.fix.added.length, p.nymphs ? nymphsKept(p) : 'not counted', p.example ? 'yes' : '']);
+    const rows = [['photo', 'orius', 'adults', 'gray_threshold', 'core_threshold', 'width', 'height', 'analysed_width', 'dish_x', 'dish_y', 'dish_r', 'straw_hits_dropped', 'counter_count', 'struck_by_hand', 'added_by_hand', 'nymphs', 'nymphs_per_adult', 'example']];
+    for (const p of done) rows.push([p.name, p.count, p.nymphs ? adultsKept(p) : p.count, p.gray, p.core, p.origW, p.origH, p.prepW, p.dish[0], p.dish[1], p.dish[2], p.debrisRemoved,
+      p.autoCount, p.fix.struck.length, p.fix.added.length, p.nymphs ? nymphsKept(p) : 'not counted',
+      p.nymphs && adultsKept(p) ? (nymphsKept(p) / adultsKept(p)).toFixed(3) : '', p.example ? 'yes' : '']);
     return new Blob([rows.map(r => r.map(esc).join(',')).join('\n') + '\n'], { type: 'text/csv' });
   }
 
