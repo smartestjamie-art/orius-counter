@@ -908,12 +908,17 @@ document.documentElement.lang = 'en';
 
   async function startCamera(deviceId) {
     stopCamera();
+    // Chrome sometimes asks quietly (a small camera icon in the address bar), so say where to look while waiting.
+    const btn = $('cameraBtn'), hint = $('stageHint'), oldHint = hint.textContent;
+    btn.disabled = true; btn.textContent = 'Starting camera…';
+    const slow = setTimeout(() => { hint.textContent = 'Waiting for camera permission: click the camera icon at the right of the address bar and choose Allow. If the camera is plugged into a hub, check it is connected.'; }, 1500);
     try {
       stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: deviceId ? { exact: deviceId } : undefined, width: { ideal: 4656 }, height: { ideal: 3496 } } });
     } catch (err) {
-      $('countMeta').textContent = 'Camera unavailable: ' + err.message + '. Add photos instead.';
+      hint.textContent = $('countMeta').textContent = 'Camera unavailable: ' + err.message + '. Check the camera permission in the address bar, or add photos instead.';
       return;
-    }
+    } finally { clearTimeout(slow); btn.disabled = false; btn.textContent = 'Use camera'; }
+    hint.textContent = oldHint;
     video.srcObject = stream; await video.play();
     video.hidden = live.hidden = false; view.hidden = true; $('cameraPanel').hidden = false;
     $('stageHint').textContent = 'Live preview. Green dots show the latest live count.';
