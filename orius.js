@@ -9,7 +9,7 @@
 
   // Counter version, stored with every result so a photo keeps the count it was given. Change it whenever
   // detection, splitting or the debris model (debris_model.js) changes.
-  const VERSION = '2026-11-02c';
+  const VERSION = '2026-11-02d';
   const REFERENCE_RADIUS = 699; // outer dish rim in the notebook's photo
   const DEFAULTS = { background_sigma: 12, gray_threshold: 75, contrast_threshold: 32, component_min_area: 55,
     core_threshold: 50, core_min_pixels: 25 };
@@ -24,6 +24,8 @@
   const MERGE = { min_solidity: 0.83, max_length: 42, max_width: 18 };
   // Long thin blobs (sticks, also curved) on front-lit photos (photobooth_count.STICK).
   const STICK = { min_length: 60, max_width: 8.3 };
+  // An adult dot on a red-brown nymph that also got a nymph dot (photobooth_count.DOUBLE).
+  const DOUBLE = { near: 13, gap: 8, max_gr: 0.56, spot: 3 };
   // Nymphs, counted on request: warm blobs that are not black adults (photobooth_count.NYMPH).
   const NYMPH = { level: 215, sigma: 1.2, local_sigma: 10, min_tan: 30, min_hue: 0.5, max_blue: 160, min_area: 15, max_sat: 0.9,
     clump: 1.1, max_clump: 6, wall: { sectors: 120, step: 4, outer: 0.75, coverage: 0.33, run: 3, filled: 6 },
@@ -1110,10 +1112,40 @@
     for (const d of candidates) d.dropped = debris.has(d.blob) ? 'straw' : model && !ring && d.p_insect < model.threshold ? 'classifier' : null;
     const adults = candidates.filter(d => !d.dropped);
     const nymphs = opts.nymphs ? findNymphs(prep.rgb, w, h, p.gray_threshold, cx, cy, r, adults, !!ring) : [];
-    const detections = adults.concat(nymphs);
-    return { count: detections.length, adults: adults.length, nymphs: nymphs.length, detections, candidates, parameters: p, components: det.components.length, backlit: !!ring,
+    for (const i of nymphDoubles(prep.rgb, w, h, adults, nymphs, s)) adults[i].dropped = 'double';
+    const kept = adults.filter(d => !d.dropped), detections = kept.concat(nymphs);
+    return { count: detections.length, adults: kept.length, nymphs: nymphs.length, detections, candidates, parameters: p, components: det.components.length, backlit: !!ring,
       debrisFragments: debris.size, debrisRemoved: candidates.filter(d => d.dropped === 'straw').length,
       classifierRemoved: candidates.filter(d => d.dropped === 'classifier').length };
+  }
+
+  /** photobooth_count.nymph_doubles: indices of adult dots sitting on a red-brown nymph that has its own dot. */
+  function nymphDoubles(rgb, W, H, adults, nymphs, s) {
+    const drop = new Set(), D = DOUBLE;
+    if (!nymphs.length) return drop;
+    const spot = (x, y, c) => {
+      x = pyRound(x); y = pyRound(y);
+      let sum = 0, n = 0;
+      for (let yy = Math.max(y - D.spot, 0); yy <= Math.min(y + D.spot, H - 1); yy++)
+        for (let xx = Math.max(x - D.spot, 0); xx <= Math.min(x + D.spot, W - 1); xx++) { sum += rgb[(yy * W + xx) * 3 + c]; n++; }
+      return sum / n;
+    };
+    adults.forEach((a, i) => {
+      let j = 0, best = Infinity;
+      nymphs.forEach((q, k) => { const d = Math.hypot(q.x - a.x, q.y - a.y); if (d < best) { best = d; j = k; } });
+      if (best > D.near * s) return;
+      const nx = nymphs[j].x, ny = nymphs[j].y;
+      let top = -Infinity, first = 0;
+      for (let k = 0; k < 15; k++) {
+        const t = k / 14, x = Math.min(Math.max(pyRound(a.x + (nx - a.x) * t), 0), W - 1), y = Math.min(Math.max(pyRound(a.y + (ny - a.y) * t), 0), H - 1);
+        const v = rgb[(y * W + x) * 3];
+        if (k === 0) first = v;
+        top = Math.max(top, v);
+      }
+      const nr = spot(nx, ny, 0);
+      if (top - Math.max(nr, first) <= D.gap && spot(nx, ny, 1) / Math.max(nr, 1) < D.max_gr) drop.add(i);
+    });
+    return drop;
   }
 
   return { VERSION, REFERENCE_RADIUS, SPLIT, DEBRIS, BACKLIT, NYMPH, STICK, MERGE, prepare, count, findDish, luma, resizeRGB, gaussianFilter, pyRound };

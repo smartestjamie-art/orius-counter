@@ -568,7 +568,7 @@ document.documentElement.lang = 'en';
         gray: p.gray, core: p.core, auto_count: p.autoCount, count: p.count,
         removed: p.fix.removed, added: p.fix.added, retyped: p.fix.retyped, added_without_candidate: p.fix.added.length - p.fix.restored.length,
         candidates: p.cands.map((c, i) => ({ x: +c[0].toFixed(1), y: +c[1].toFixed(1), p_insect: +c[2].toFixed(4),
-          dropped: ['', 'straw', 'classifier'][c[3]] || null, kind: c[4] ? 'nymph' : 'adult', kind_by_hand: p.fix.kinds[i], label: p.fix.labels[i], features: p.feats[i] })) })) };
+          dropped: ['', 'straw', 'classifier', 'nymph double'][c[3]] || null, kind: c[4] ? 'nymph' : 'adult', kind_by_hand: p.fix.kinds[i], label: p.fix.labels[i], features: p.feats[i] })) })) };
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
     offer(`orius_corrections_${stamp}.json`, new Blob([JSON.stringify(out)], { type: 'application/json' }));
   };
