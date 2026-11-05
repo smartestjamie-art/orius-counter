@@ -198,7 +198,7 @@
           <div class="slider"><label for="sharp">Sharpening</label><output id="sharpOut"></output><input type="range" id="sharp"></div>
           <p class="note">Low gain gives less noise and less smoothing; make up with a longer exposure (the camera is fixed). Strong sharpening adds halos the counter may split on.</p>
         </details>
-        <div class="row" id="focusConnect" hidden><button class="small" id="focusConnectBtn">Connect focus helper</button></div>
+        <div class="row" id="focusConnect" hidden><button class="small" id="focusConnectBtn">Connect focus helper</button><a class="small" href="https://smartestjamie-art.github.io/orius-counter/orius_focus_helper.zip" download>Download focus helper for Mac</a></div>
         <p class="note" id="focusNote"></p>
         <label class="check"><input type="checkbox" id="liveToggle" checked> Live count on the preview</label>
         <div class="meta" id="liveMeta"></div>
@@ -1267,11 +1267,12 @@ document.documentElement.lang = 'en';
   // may reach a program on this Mac, and it asks reliably when the request comes from a click.
   let focusConnected = false;
   async function connectHelper() {
-    const h = await helper();
-    focusConnected = !!h;
-    if (!h) {
-      $('focusConnect').hidden = false;
-      $('focusNote').textContent = 'Manual focus: double-click “Start focus helper” in the Orius计数/focus_helper folder, then press Connect focus helper. If Chrome asks to let this site reach apps on this device, choose Allow.';
+    const h = await helper(), reached = !!h && h.value >= 0; // the helper answers -1 when it cannot reach the camera
+    focusConnected = reached;
+    if (!reached) {
+      $('focusConnect').hidden = false; $('focusRow').hidden = $('focusBtns').hidden = $('stackRow').hidden = true;
+      $('focusNote').textContent = h ? 'The focus helper is running but cannot reach the Arducam. Check its USB cable and hub, then press Connect focus helper.'
+        : 'Manual focus: download the focus helper, unzip it, double-click “Start focus helper” in its focus_helper folder (if macOS blocks it: right-click it and choose Open) and keep its window open, then press Connect focus helper. If Chrome asks to let this site reach apps on this device, choose Allow.';
       return false;
     }
     const f = $('focus'); f.min = h.min; f.max = h.max; f.step = 1; f.value = h.value;
@@ -1322,7 +1323,7 @@ document.documentElement.lang = 'en';
   setInterval(() => { if (stream && camInfo && $('aeToggle').checked && !$('camSettings').hidden) camera().then(showCamera); }, 2000);
   $('focusConnectBtn').onclick = async () => {
     $('focusNote').textContent = 'Connecting…';
-    if (!await connectHelper()) $('focusNote').textContent = 'Could not reach the focus helper. Is its window open? In Chrome, click the icon at the left of the address bar, open Site settings and set “Local network access” (or “Apps on device”) to Allow, then try again.';
+    if (!await connectHelper() && !await helper()) $('focusNote').textContent = 'Could not reach the focus helper. Is its window open? In Chrome, click the icon at the left of the address bar, open Site settings and set “Local network access” (or “Apps on device”) to Allow, then try again.';
   };
 
   // Step through the focus range and keep the setting whose weakest band (left, centre, right) is sharpest:
