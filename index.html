@@ -966,11 +966,11 @@ document.documentElement.lang = 'en';
     sel.value = track.getSettings().deviceId || '';
     const caps = track.getCapabilities ? track.getCapabilities() : {};
     $('focusBtns').hidden = $('focusConnect').hidden = true; $('focusNote').textContent = '';
-    if (!await connectHelper() && caps.focusDistance) { // manual focus where the browser exposes it (not Safari or Chrome on macOS)
-      const f = $('focus'); f.min = caps.focusDistance.min; f.max = caps.focusDistance.max; f.step = caps.focusDistance.step || 0.01;
-      f.value = track.getSettings().focusDistance || caps.focusDistance.min; $('focusOut').textContent = 'auto'; $('focusRow').hidden = false;
-      f.oninput = () => { track.applyConstraints({ advanced: [{ focusMode: 'manual', focusDistance: +f.value }] }).catch(() => {}); $('focusOut').textContent = (+f.value).toFixed(2); };
-    } else if (!focusConnected) $('focusRow').hidden = true;
+    // the helper first; otherwise the browser's own focus control where it has one (not Safari or Chrome on macOS)
+    browserCam = null;
+    const fd = caps.focusDistance;
+    if (fd && fd.max > fd.min) { const h = await helper(); if (!(h && h.value >= 0)) browserCam = { track, caps }; }
+    await connectHelper();
     liveHistory = []; livePoints = [];
     liveTimer = setInterval(liveTick, 400);
     magTimer = setInterval(drawMag, 120); // the video keeps moving under a still pointer
@@ -978,7 +978,7 @@ document.documentElement.lang = 'en';
 
   function stopCamera() {
     if (stream) stream.getTracks().forEach(t => t.stop());
-    stream = null; clearInterval(liveTimer); clearInterval(magTimer);
+    stream = null; browserCam = null; clearInterval(liveTimer); clearInterval(magTimer);
     video.hidden = live.hidden = true; view.hidden = false; $('cameraPanel').hidden = true;
     renderFix(); draw();
   }
@@ -1261,9 +1261,45 @@ document.documentElement.lang = 'en';
     return soft.length ? `⚠ ${soft.join(' and ')} out of focus` : '';
   }
 
-  // The focus helper (focus_helper/orius_focus on this Mac) sets the camera's UVC focus, which browsers
+  // Where the browser itself can set the focus (Chrome and Edge on Windows), it stands in for the helper and gives
+  // the same answers. Its focus range is mapped onto the helper's 0–1023, so the sweep and stack steps mean the same.
+  let browserCam = null; // { track, caps } while the browser's own focus control is in use
+  const FOCUS_UNITS = 1023;
+  const isMac = /Mac/i.test(navigator.userAgentData && navigator.userAgentData.platform || navigator.platform || '');
+  async function browserFocus(query) {
+    const { track, caps } = browserCam, fd = caps.focusDistance, p = new URLSearchParams(query || '');
+    try {
+      if (p.has('value')) {
+        const v = Math.max(0, Math.min(FOCUS_UNITS, +p.get('value')));
+        let d = fd.min + (fd.max - fd.min) * v / FOCUS_UNITS;
+        if (fd.step) d = fd.min + Math.round((d - fd.min) / fd.step) * fd.step;
+        await track.applyConstraints({ advanced: [{ focusMode: 'manual', focusDistance: Math.min(fd.max, d) }] });
+      } else if (p.get('auto') === '1') await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+    } catch {}
+    const s = track.getSettings(), d = s.focusDistance != null ? s.focusDistance : fd.min;
+    return { min: 0, max: FOCUS_UNITS, value: Math.round(FOCUS_UNITS * (d - fd.min) / (fd.max - fd.min)), auto: s.focusMode === 'manual' ? 0 : 1 };
+  }
+  // Exposure (0.1 ms units, as the helper) and sharpening; browsers expose no gain.
+  async function browserCamera(query) {
+    const { track, caps } = browserCam, p = new URLSearchParams(query || ''), adv = {};
+    if (p.has('auto_exposure')) adv.exposureMode = p.get('auto_exposure') === '1' ? 'continuous' : 'manual';
+    if (p.has('exposure')) { adv.exposureMode = 'manual'; adv.exposureTime = +p.get('exposure'); }
+    if (p.has('sharpness')) adv.sharpness = +p.get('sharpness');
+    if (Object.keys(adv).length) try { await track.applyConstraints({ advanced: [adv] }); } catch {}
+    const s = track.getSettings(), out = { auto_exposure: s.exposureMode === 'manual' ? 0 : 1 }, et = caps.exposureTime;
+    if (et && et.max > 1 && (caps.exposureMode || []).includes('manual')) {
+      const min = Math.max(1, et.min);
+      out.exposure = { min, max: et.max, value: Math.max(min, Math.min(et.max, s.exposureTime || min)) };
+    }
+    if (caps.sharpness && caps.sharpness.max > caps.sharpness.min)
+      out.sharpness = { min: caps.sharpness.min, max: caps.sharpness.max, value: s.sharpness != null ? s.sharpness : caps.sharpness.min };
+    return out;
+  }
+
+  // The focus helper (focus_helper/orius_focus on a Mac) sets the camera's UVC focus, which browsers
   // on macOS cannot. null when it is not running.
   async function helper(query) {
+    if (browserCam) return browserFocus(query);
     const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 1500);
     try {
       const r = await fetch('http://127.0.0.1:8777/focus' + (query || ''), { signal: ctl.signal, cache: 'no-store', targetAddressSpace: 'loopback' });
@@ -1278,8 +1314,9 @@ document.documentElement.lang = 'en';
     const h = await helper(), reached = !!h && h.value >= 0; // the helper answers -1 when it cannot reach the camera
     focusConnected = reached;
     if (!reached) {
-      $('focusConnect').hidden = false; $('focusRow').hidden = $('focusBtns').hidden = $('stackRow').hidden = true;
-      $('focusNote').textContent = h ? 'The focus helper is running but cannot reach the Arducam. Check its USB cable and hub, then press Connect focus helper.'
+      $('focusConnect').hidden = !isMac; $('focusRow').hidden = $('focusBtns').hidden = $('stackRow').hidden = true;
+      $('focusNote').textContent = !isMac ? 'This browser cannot set this camera’s focus, so the focus controls and focus stack are off. On Windows, open this page in Chrome or Edge.'
+        : h ?'The focus helper is running but cannot reach the Arducam. Check its USB cable and hub, then press Connect focus helper.'
         : 'Manual focus: download the focus helper, unzip it, double-click “Start focus helper” in its focus_helper folder (if macOS blocks it: right-click it and choose Open) and keep its window open, then press Connect focus helper. If Chrome asks to let this site reach apps on this device, choose Allow.';
       return false;
     }
@@ -1297,6 +1334,7 @@ document.documentElement.lang = 'en';
 
   // Exposure (0.1 ms units, slider on a log scale), gain and sharpening through the helper's /camera.
   async function camera(query) {
+    if (browserCam) return browserCamera(query);
     const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 1500);
     try {
       const r = await fetch('http://127.0.0.1:8777/camera' + (query || ''), { signal: ctl.signal, cache: 'no-store', targetAddressSpace: 'loopback' });
@@ -1312,6 +1350,7 @@ document.documentElement.lang = 'en';
     $('aeToggle').checked = !!c.auto_exposure;
     $('expo').value = expoToSlider(c.exposure.value); $('expoOut').textContent = `${(c.exposure.value / 10).toFixed(1)} ms${c.auto_exposure ? ' (auto)' : ''}`;
     for (const [id, key] of [['gain', 'gain'], ['sharp', 'sharpness']]) {
+      $(id).closest('.slider').hidden = !c[key];
       if (!c[key]) continue;
       const el = $(id); el.min = c[key].min; el.max = c[key].max; el.value = c[key].value; $(id + 'Out').textContent = c[key].value;
     }
