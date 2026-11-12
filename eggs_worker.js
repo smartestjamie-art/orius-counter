@@ -11,6 +11,7 @@ self.onmessage = e => {
   try {
     if (m.type === 'version') return self.postMessage({ seq: m.seq, version: VERSION });
     if (m.type === 'count') return self.postMessage({ seq: m.seq, ...count(m) });
+    if (m.type === 'match') return self.postMessage({ seq: m.seq, ...match(m) });
   } catch (err) { self.postMessage({ seq: m.seq, error: err.message }); }
 };
 
@@ -80,6 +81,64 @@ function count({ rgb, width: W, height: H, de, contrast, edge }) {
     if (pod[i] && (!pod[i - W] || !pod[i + W])) outline.push([x, y]);
   }
   return { version: VERSION, points, dropped, outline, podArea: area, ms: Math.round(performance.now() - t0) };
+}
+
+// ---------- overlap between neighbouring shots ----------
+// a, b: grey thumbnails (same size) of two shots along the rail. Finds the shift (s, dy) with b(x, y) ≈ a(x + s, y + dy):
+// the tray only slides, so it is a plain shift. Texture (spots, seams, the pod outline) is matched after removing the
+// lighting (high-pass) and clipping strong edges, so the pod outline does not outweigh everything else.
+// Coarse search over every shift on a quarter-size copy, then refined at full thumbnail size.
+// score: normalised correlation at the best shift; second: best score at a clearly different shift.
+function match({ a, b, width: W, height: H }) {
+  const A = texture(new Float32Array(a), W, H), B = texture(new Float32Array(b), W, H);
+  const f = 4, w = Math.floor(W / f), h = Math.floor(H / f);
+  const As = shrink(A, W, H, f), Bs = shrink(B, W, H, f);
+  const minOv = Math.round(w * 0.06), maxDy = Math.round(h * 0.08);
+  let best = { score: -2 }, scores = [];
+  for (let s = -(w - minOv); s <= w - minOv; s++) {
+    let top = -2, topDy = 0;
+    for (let dy = -maxDy; dy <= maxDy; dy++) { const c = ncc(As, Bs, w, h, s, dy); if (c > top) { top = c; topDy = dy; } }
+    scores.push([s, top]);
+    if (top > best.score) best = { score: top, s, dy: topDy };
+  }
+  const second = Math.max(-1, ...scores.filter(([s]) => Math.abs(s - best.s) > 3).map(([, c]) => c));
+  let fine = { score: -2 };
+  for (let s = best.s * f - f - 1; s <= best.s * f + f + 1; s++)
+    for (let dy = best.dy * f - f - 1; dy <= best.dy * f + f + 1; dy++) {
+      if (Math.abs(s) > W - minOv * f) continue;
+      const c = ncc(A, B, W, H, s, dy); if (c > fine.score) fine = { score: c, s, dy };
+    }
+  return { s: fine.s, dy: fine.dy, score: fine.score, second, coarse: best.score };
+}
+
+function texture(g, W, H) {
+  const m = boxMean(g, W, H, 6), out = new Float32Array(W * H);
+  let ss = 0;
+  for (let i = 0; i < W * H; i++) { out[i] = g[i] - m[i]; ss += out[i] * out[i]; }
+  const lim = 2.5 * Math.sqrt(ss / (W * H)) || 1;
+  for (let i = 0; i < W * H; i++) out[i] = Math.max(-lim, Math.min(lim, out[i]));
+  return out;
+}
+function shrink(v, W, H, f) {
+  const w = Math.floor(W / f), h = Math.floor(H / f), out = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let s = 0;
+    for (let j = 0; j < f; j++) for (let i = 0; i < f; i++) s += v[(y * f + j) * W + x * f + i];
+    out[y * w + x] = s / (f * f);
+  }
+  return out;
+}
+function ncc(A, B, W, H, s, dy) { // b pixel (x, y) against a pixel (x + s, y + dy), over the part both cover
+  const x0 = Math.max(0, -s), x1 = Math.min(W, W - s), y0 = Math.max(0, -dy), y1 = Math.min(H, H - dy);
+  let n = 0, sa = 0, sb = 0, sab = 0, saa = 0, sbb = 0;
+  for (let y = y0; y < y1; y++) {
+    const ra = (y + dy) * W + s, rb = y * W;
+    for (let x = x0; x < x1; x++) { const p = A[ra + x], q = B[rb + x]; sa += p; sb += q; sab += p * q; saa += p * p; sbb += q * q; }
+    n += x1 - x0;
+  }
+  if (n < 50) return -2;
+  const cov = sab - sa * sb / n, va = saa - sa * sa / n, vb = sbb - sb * sb / n;
+  return va > 0 && vb > 0 ? cov / Math.sqrt(va * vb) : -2;
 }
 
 // Square min/max filters of radius r, separable, using a running count (binary images).

@@ -207,8 +207,11 @@
 
       <div class="panel">
         <h2>Overlap between rail marks</h2>
-        <p class="note">Shots at neighbouring marks overlap. For each mark, count only between these edges (as a share of
-          the photo width) so no egg is counted twice. Shaded parts are not counted.</p>
+        <label class="check"><input type="checkbox" id="autoOverlap"> Find the overlap by matching neighbouring shots</label>
+        <p class="note">Shots at neighbouring marks of the same side overlap. Each overlap is split down the middle, so every
+          egg is counted once; shaded parts are not counted.</p>
+        <p class="note" id="matchNote"></p>
+        <p class="note">Where no match is found (or matching is off), count between these edges for each mark:</p>
         <div class="field"><label for="trimPos">Mark</label><select id="trimPos"><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></div>
         <div class="slider"><label for="trimL">Count from</label><output id="trimLOut"></output><input type="range" id="trimL" min="0" max="50" step="1"></div>
         <div class="slider"><label for="trimR">Count to</label><output id="trimROut"></output><input type="range" id="trimR" min="50" max="100" step="1"></div>
@@ -300,7 +303,7 @@ document.documentElement.lang = 'en';
 (() => {
   const $ = id => document.getElementById(id);
   const SHOTS = ['A1', 'A2', 'A3', 'B1', 'B2', 'B3'];
-  const DEFAULTS = { eggPx: null, contrast: 18, edge: 1.3, trim: { 1: [0, 100], 2: [0, 100], 3: [0, 100] } };
+  const DEFAULTS = { eggPx: null, contrast: 18, edge: 1.3, autoOverlap: true, trim: { 1: [0, 100], 2: [0, 100], 3: [0, 100] } };
   let settings = structuredClone(DEFAULTS), podId = 'Pod 1';
   try {
     const s = JSON.parse(localStorage.getItem('eggSettings') || 'null');
@@ -372,7 +375,9 @@ document.documentElement.lang = 'en';
       try {
         ph.status = 'reading'; renderList(); setBusy(`Reading ${name}…`);
         ph.bmp = await createImageBitmap(blob); ph.origW = ph.bmp.width; ph.origH = ph.bmp.height;
+        ph.thumb = thumbOf(ph.bmp);
         if (selected === ph) draw();
+        queueMicrotask(updateMatches);
         if (stored && stored.eggD === eggPxFor(ph) && stored.contrast === settings.contrast && stored.edge === settings.edge) ph.status = 'done';
         else await countPhoto(ph);
       } catch (err) { ph.status = 'error: ' + err.message; }
@@ -420,10 +425,59 @@ document.documentElement.lang = 'en';
 
   function select(ph) { if (selected !== ph) zoom = null; selected = ph; if (ph && posOf(ph)) $('trimPos').value = posOf(ph); renderTrim(); render(); draw(); }
 
+  // ---------- overlap between neighbouring shots of one side (A1-A2, A2-A3, B1-B2, B2-B3) ----------
+  const THUMB_W = 640;
+  function thumbOf(bmp) {
+    const w = THUMB_W, h = Math.round(bmp.height * w / bmp.width);
+    const c = new OffscreenCanvas(w, h), ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.imageSmoothingQuality = 'high'; ctx.drawImage(bmp, 0, 0, w, h);
+    const d = ctx.getImageData(0, 0, w, h).data, g = new Float32Array(w * h);
+    for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2];
+    return { g, w, h };
+  }
+  const matches = new Map(); // 'keyA|keyB' -> { s, dy, score, second, ok } with s in original pixels; 'pending' while working
+  const neighbour = (ph, step) => {
+    const p = +posOf(ph); if (!p || !ph.shot) return null;
+    return photos.find(q => q !== ph && !q.example === !ph.example && q.pod === ph.pod && q.shot === ph.shot[0] + (p + step)) || null;
+  };
+  function updateMatches() {
+    if (!settings.autoOverlap) return;
+    for (const a of photos) {
+      const b = neighbour(a, 1); if (!b || !a.thumb || !b.thumb) continue;
+      const key = a.key + '|' + b.key; if (matches.has(key)) continue;
+      if (a.thumb.w !== b.thumb.w || a.thumb.h !== b.thumb.h) { matches.set(key, { ok: false, why: 'different photo sizes' }); continue; }
+      matches.set(key, 'pending');
+      call({ type: 'match', a: a.thumb.g.slice().buffer, b: b.thumb.g.slice().buffer, width: a.thumb.w, height: a.thumb.h })
+        .then(r => {
+          const k = a.origW / a.thumb.w;
+          // a clear peak: decent correlation, well above the best other shift
+          const ok = r.score > 0.25 && r.score - Math.max(0, r.second) > 0.08;
+          matches.set(key, { s: r.s * k, dy: r.dy * k, score: r.score, second: r.second, ok });
+        })
+        .catch(err => matches.set(key, { ok: false, why: err.message }))
+        .finally(() => { render(); draw(); });
+    }
+  }
+  const matchOf = (a, b) => { const m = a && b && matches.get(a.key + '|' + b.key); return m && m !== 'pending' ? m : null; };
+
   // ---------- counting area and corrections ----------
   const posOf = ph => (ph.shot || '')[1] || '';
   function trimOf(ph) { const p = posOf(ph); return p ? settings.trim[p] : [0, 100]; }
-  function inArea(ph, x) { const [a, b] = trimOf(ph); return x >= a / 100 * ph.origW && x <= b / 100 * ph.origW; }
+  // The counted part of a photo, [x0, x1] in its pixels: the mark's edges, replaced on a side by the middle of the
+  // overlap where a neighbouring shot was matched. With b(x) ≈ a(x + s) the overlap is a's x in [s, W] (s > 0) or
+  // [0, W + s] (s < 0); its middle is (W + s) / 2 in a and (W - s) / 2 in b.
+  function areaOf(ph) {
+    const [ta, tb] = trimOf(ph), W = ph.origW;
+    let x0 = ta / 100 * W, x1 = tb / 100 * W;
+    if (settings.autoOverlap) {
+      const next = neighbour(ph, 1), prev = neighbour(ph, -1);
+      const mn = matchOf(ph, next), mp = matchOf(prev, ph);
+      if (mn && mn.ok) { const c = (W + mn.s) / 2; if (mn.s > 0) x1 = c; else x0 = c; }
+      if (mp && mp.ok) { const c = (W - mp.s) / 2; if (mp.s > 0) x0 = c; else x1 = c; }
+    }
+    return [x0, x1];
+  }
+  function inArea(ph, x) { const [a, b] = areaOf(ph); return x >= a && x <= b; }
   const markR = ph => Math.max(2, (ph.eggD || 4) * 1.5);
   function nearest(pts, x, y, R) {
     let best = -1, bd = R;
@@ -477,10 +531,10 @@ document.documentElement.lang = 'en';
   // Everything drawn over a photo: shaded parts outside the counting area, pod outline, dots.
   function overlay(ctx, ph, at, k, dpr, clip, dot) {
     if (ph.status !== 'done') return;
-    const [a, b] = trimOf(ph), [x0, y0] = at(0, 0), [x1, y1] = at(ph.origW, ph.origH);
+    const [a, b] = areaOf(ph), [x0, y0] = at(0, 0), [x1, y1] = at(ph.origW, ph.origH), [ca] = at(a, 0), [cb] = at(b, 0);
     ctx.fillStyle = 'rgba(0,0,0,.5)';
-    if (a > 0) ctx.fillRect(x0, y0, (x1 - x0) * a / 100, y1 - y0);
-    if (b < 100) ctx.fillRect(x0 + (x1 - x0) * b / 100, y0, (x1 - x0) * (1 - b / 100), y1 - y0);
+    if (a > 0) ctx.fillRect(x0, y0, ca - x0, y1 - y0);
+    if (b < ph.origW) ctx.fillRect(cb, y0, x1 - cb, y1 - y0);
     if ($('showPod').checked && ph.outline) {
       ctx.fillStyle = '#ff5fd2'; const s = Math.max(1, dpr);
       for (const [x, y] of ph.outline) { const [X, Y] = at(x, y); if (X > -2 && Y > -2 && X < clip[0] + 2 && Y < clip[1] + 2) ctx.fillRect(X - s / 2, Y - s / 2, s, s); }
@@ -586,7 +640,7 @@ document.documentElement.lang = 'en';
   }
 
   // ---------- panels and lists ----------
-  function render() { renderCount(); renderShots(); renderList(); renderPods(); renderFix(); renderSettings(); }
+  function render() { updateMatches(); renderCount(); renderShots(); renderList(); renderPods(); renderFix(); renderSettings(); }
   const podPhotos = pod => photos.filter(p => p.pod === pod);
   const podTotal = pod => podPhotos(pod).reduce((a, p) => a + (countOf(p) || 0), 0);
 
@@ -596,10 +650,26 @@ document.documentElement.lang = 'en';
     if (!ph) { $('podN').textContent = '–'; $('countMeta').textContent = 'Add pod photos or use the camera.'; return; }
     const shots = podPhotos(ph.pod);
     $('podN').textContent = podTotal(ph.pod); $('podUnit').textContent = `eggs on ${ph.pod}`;
-    const [a, b] = trimOf(ph);
+    const [a, b] = areaPct(ph);
     $('countMeta').textContent = ph.status !== 'done' ? ph.status + '…' :
       `${ph.example ? 'Example photo · ' : ''}Shot ${ph.shot || '–'}, ${shots.length} of 6 shots of this pod in.` +
       `${a > 0 || b < 100 ? ` Counting ${a}–${b}% of the width.` : ''} Egg size ${ph.eggD} px, found in ${ph.ms} ms.`;
+    renderMatchNote();
+  }
+  const areaPct = ph => areaOf(ph).map(v => Math.round(v / ph.origW * 1000) / 10);
+
+  function renderMatchNote() {
+    const ph = selected, el = $('matchNote');
+    if (!settings.autoOverlap || !ph) { el.textContent = ''; return; }
+    const parts = [];
+    for (const [step, label] of [[-1, 'previous'], [1, 'next']]) {
+      const q = neighbour(ph, step); if (!q) continue;
+      const m = step > 0 ? matches.get(ph.key + '|' + q.key) : matches.get(q.key + '|' + ph.key);
+      if (!m || m === 'pending') parts.push(`${q.shot}: matching…`);
+      else if (!m.ok) parts.push(`${q.shot}: no clear match${m.why ? ` (${m.why})` : m.score != null ? ` (score ${m.score.toFixed(2)})` : ''}, using the mark setting`);
+      else parts.push(`${q.shot}: overlap ${Math.round((1 - Math.abs(m.s) / ph.origW) * 100)}% of the width, match ${m.score.toFixed(2)}`);
+    }
+    el.textContent = parts.length ? `This shot (${ph.shot}) · ` + parts.join(' · ') : ph.shot ? `This shot (${ph.shot}) has no neighbouring shot yet.` : '';
   }
 
   function renderShots() {
@@ -691,6 +761,8 @@ document.documentElement.lang = 'en';
     $('trimL').value = a; $('trimR').value = b; $('trimLOut').textContent = a + '%'; $('trimROut').textContent = b + '%';
   }
   $('trimPos').onchange = renderTrim;
+  $('autoOverlap').checked = settings.autoOverlap;
+  $('autoOverlap').onchange = () => { settings.autoOverlap = $('autoOverlap').checked; saveSettings(); updateMatches(); render(); draw(); };
   $('trimL').oninput = $('trimR').oninput = () => {
     settings.trim[$('trimPos').value] = [+$('trimL').value, +$('trimR').value]; saveSettings();
     renderTrim(); render(); draw();
@@ -703,6 +775,7 @@ document.documentElement.lang = 'en';
     $('eggPx').value = px; $('eggPxOut').textContent = px + (settings.eggPx ? ' px' : ' px (auto)');
     $('contrast').value = settings.contrast; $('contrastOut').textContent = settings.contrast;
     $('edge').value = settings.edge; $('edgeOut').textContent = settings.edge;
+    $("autoOverlap").checked = settings.autoOverlap;
   }
   $('eggPx').oninput = () => { settings.eggPx = +$('eggPx').value; saveSettings(); renderSettings(); recountAll(); };
   $('contrast').oninput = () => { settings.contrast = +$('contrast').value; saveSettings(); renderSettings(); recountAll(); };
@@ -800,7 +873,7 @@ document.documentElement.lang = 'en';
   };
   $('saveShotsCsv').onclick = () => {
     const rows = [['pod', 'shot', 'photo', 'eggs', 'detected', 'struck_out', 'added', 'egg_px', 'contrast', 'count_from_pct', 'count_to_pct']];
-    for (const p of real()) { const [a, b] = trimOf(p); rows.push([p.pod, p.shot, p.name, countOf(p) ?? '', p.points.length, p.fix.removed.length, p.fix.added.length, p.eggD, p.contrast, a, b]); }
+    for (const p of real()) { const [a, b] = areaPct(p); rows.push([p.pod, p.shot, p.name, countOf(p) ?? '', p.points.length, p.fix.removed.length, p.fix.added.length, p.eggD, p.contrast, a, b]); }
     if (rows.length < 2) { $('saveNote').textContent = 'No pod photos yet (the example is not saved).'; return; }
     download(csv(rows), `orius_eggs_shots_${new Date().toISOString().slice(0, 10)}.csv`);
   };
