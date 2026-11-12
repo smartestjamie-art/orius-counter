@@ -125,11 +125,19 @@
   .pill { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px; font-weight: 600;
     background: var(--accent-soft); color: var(--accent); }
   .pill.ex { background: transparent; border: 1px solid var(--amber); color: var(--amber); }
+  .tabs { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+  .tabs a { font: 600 13px/1 var(--font-body); padding: 7px 11px; border-radius: 6px; color: var(--muted); text-decoration: none; }
+  .tabs a:hover { color: var(--ink); }
+  .tabs a[aria-current="page"] { background: var(--accent-soft); color: var(--accent); }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 
 <div class="wrap">
   <header>
+    <nav class="tabs" aria-label="Counters">
+      <a href="./" aria-current="page">Orius in dishes</a>
+      <a href="eggs.html">Eggs on pods</a>
+    </nav>
     <h1>Orius Counter <span>· black Orius in a dish photo</span></h1>
     <div class="actions">
       <button id="cameraBtn" hidden>Use camera</button>

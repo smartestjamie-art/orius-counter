@@ -1,0 +1,820 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Egg Counter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+  /* Layout: a lab bench tool. Photo viewer on the left, the count and its controls on the right,
+     the batch of photos underneath. Stacks to one column on phones. */
+  :root {
+    --bg: #f2f4f1;
+    --surface: #ffffff;
+    --ink: #17201b;
+    --muted: #5b675f;
+    --line: #d8ded8;
+    --accent: #0e7a4e;
+    --accent-ink: #ffffff;
+    --accent-soft: #e2f1e9;
+    --amber: #a8701a;
+    --danger: #b3261e;
+    --stage: #0d110f;
+    --mark: #22e57f;
+    --font-body: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1411; --surface: #171e1a; --ink: #e5ebe6; --muted: #98a59c; --line: #29332d;
+      --accent: #3fcf8e; --accent-ink: #062014; --accent-soft: #1b2e24; --amber: #e2aa4c; --danger: #f2867e;
+      --stage: #070a08; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1411; --surface: #171e1a; --ink: #e5ebe6; --muted: #98a59c; --line: #29332d;
+    --accent: #3fcf8e; --accent-ink: #062014; --accent-soft: #1b2e24; --amber: #e2aa4c; --danger: #f2867e;
+    --stage: #070a08; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { background: var(--bg); color: var(--ink); font: 15px/1.45 var(--font-body); }
+  .wrap { margin: 0 auto; padding-block: 18px 40px;
+    padding-left: max(clamp(16px, 2vw, 32px), env(safe-area-inset-left, 0px)); padding-right: max(clamp(16px, 2vw, 32px), env(safe-area-inset-right, 0px));
+    display: flex; flex-direction: column; gap: 16px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+  header h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; text-wrap: balance; }
+  header h1 span { color: var(--muted); font-weight: 500; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+  button, .btn { font: 600 14px/1 var(--font-body); padding: 10px 14px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--surface); color: var(--ink); cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.small { padding: 6px 10px; font-size: 13px; }
+  button[aria-pressed="true"] { background: var(--amber); border-color: var(--amber); color: #fff; }
+  .stage.correcting { cursor: crosshair; outline: 3px solid var(--amber); outline-offset: -3px; }
+  td.rowBtns { white-space: nowrap; } td.rowBtns button + button { margin-left: 4px; }
+  .key { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; color: var(--muted); margin: 8px 0; }
+  .key i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 1px solid #000; margin-right: 5px; vertical-align: 0; }
+  .key span:last-child i { border: 2px solid; width: 8px; height: 8px; }
+  /* The photo takes the room left by the side panels; from 1600 px the panels form two columns. */
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 24vw, 400px); grid-template-rows: auto 1fr;
+    grid-template-areas: "photo side" "list side"; gap: 16px; align-items: start; }
+  .photo-area { grid-area: photo; min-width: 0; }
+  .grid > aside { grid-area: side; }
+  .photos-panel { grid-area: list; }
+  @media (max-width: 1000px) { .grid { grid-template-columns: minmax(0, 1fr) 260px; } }
+  @media (min-width: 1600px) {
+    .grid { grid-template-columns: minmax(0, 1fr) clamp(620px, 36vw, 820px); }
+    .grid > aside { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
+    .grid > aside > .panel:first-child { grid-column: 1 / -1; }
+  }
+  @media (max-width: 700px) {
+    .grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; grid-template-areas: "photo" "side" "list"; }
+  }
+
+  /* As wide as the column allows, but never taller than the window. */
+  .stage { position: relative; background: var(--stage); border-radius: 10px; overflow: hidden; aspect-ratio: 4 / 3;
+    width: min(100%, calc((100dvh - 90px) * 4 / 3)); margin-inline: auto; touch-action: manipulation; }
+  .stage:fullscreen { width: 100vw; height: 100vh; aspect-ratio: auto; border-radius: 0; }
+  .stage .zoomBar { position: absolute; right: 10px; top: 10px; z-index: 2; display: flex; gap: 6px; align-items: center; }
+  .stage .zoomBar button { padding: 6px 10px; font-size: 13px; opacity: .88; min-width: 32px; }
+  .stage .zoomBar span { font: 600 12px/1 var(--font-body); color: #fff; background: rgba(0,0,0,.55); padding: 5px 7px; border-radius: 6px; }
+  .stage .zoomBar span:empty { display: none; }
+  .stage canvas#view { touch-action: pan-x pan-y; }
+  .stage canvas, .stage video { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .stage video { object-fit: contain; }
+  .stage.drag { outline: 3px dashed var(--accent); outline-offset: -6px; }
+  .stage .empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; color: #c9d3cc;
+    padding: 24px; }
+  .stage .busy { position: absolute; left: 12px; bottom: 12px; padding: 6px 10px; border-radius: 6px;
+    background: rgba(0, 0, 0, .65); color: #fff; font: 13px var(--font-mono); }
+  .stage .tag { position: absolute; left: 12px; top: 12px; padding: 4px 8px; border-radius: 6px; background: var(--amber);
+    color: #fff; font: 600 12px var(--font-body); letter-spacing: .03em; }
+  .mag { display: block; width: 100%; aspect-ratio: 1; max-width: min(100%, 380px); margin-inline: auto; border-radius: 8px; background: var(--stage); cursor: crosshair; }
+  .hint { color: var(--muted); font-size: 13px; margin: 6px 2px 0; }
+
+  aside { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+  .panel h2 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .count { display: flex; align-items: baseline; gap: 10px; }
+  .count .n { font: 600 64px/1 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--accent); }
+  .count .unit { font-size: 18px; font-weight: 600; }
+  .count .n.nymph { font-size: 40px; color: var(--amber); }
+  .meta { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; margin-top: 8px; }
+  .slider { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: center; margin: 10px 0; }
+  .slider input { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
+  .slider output { font: 600 14px var(--font-mono); font-variant-numeric: tabular-nums; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .check { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 14px; }
+  .check input { accent-color: var(--accent); }
+  .note { font-size: 13px; color: var(--muted); }
+  .note.warn { color: var(--danger); }
+
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+    font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  tr.sel td { background: var(--accent-soft); }
+  tbody tr { cursor: pointer; }
+  td.num { font: 600 15px var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+  td.name { overflow-wrap: anywhere; }
+  .status { font-size: 13px; color: var(--muted); }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px; font-weight: 600;
+    background: var(--accent-soft); color: var(--accent); }
+  .pill.ex { background: transparent; border: 1px solid var(--amber); color: var(--amber); }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  .tabs { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+  .tabs a { font: 600 13px/1 var(--font-body); padding: 7px 11px; border-radius: 6px; color: var(--muted); text-decoration: none; }
+  .tabs a:hover { color: var(--ink); }
+  .tabs a[aria-current="page"] { background: var(--accent-soft); color: var(--accent); }
+  .count .n.pod { font-size: 40px; color: var(--ink); }
+  input[type="text"], select { font: 500 14px var(--font-body); padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--surface); color: var(--ink); min-width: 0; }
+  td select, td input[type="text"] { padding: 5px 6px; font-size: 13px; }
+  td input[type="text"] { width: 9em; }
+  .field { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: center; margin: 8px 0; font-size: 14px; }
+  .shots { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
+  .shots span { border: 1px solid var(--line); border-radius: 7px; padding: 6px 8px; font-size: 12px; color: var(--muted);
+    display: flex; justify-content: space-between; gap: 6px; }
+  .shots span b { font: 600 13px var(--font-mono); color: var(--ink); font-variant-numeric: tabular-nums; }
+  .shots span.have { border-color: var(--accent); background: var(--accent-soft); }
+  .shots span.next { border-style: dashed; border-color: var(--amber); }
+  td.pods { font: 600 14px var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+  td.pods.total { color: var(--accent); }
+</style>
+
+<div class="wrap">
+  <header>
+    <nav class="tabs" aria-label="Counters">
+      <a href="./">Orius in dishes</a>
+      <a href="eggs.html" aria-current="page">Eggs on pods</a>
+    </nav>
+    <h1>Egg Counter <span>· Orius eggs on a bean pod</span></h1>
+    <div class="actions">
+      <button id="cameraBtn" hidden>Use camera</button>
+      <button id="addBtn" class="primary">Add photos…</button>
+      <input id="fileInput" type="file" accept="image/*" multiple hidden>
+    </div>
+  </header>
+
+  <div class="grid">
+    <section class="photo-area">
+      <div class="stage" id="stage">
+        <canvas id="view" aria-label="Pod photo with a dot on each detected egg"></canvas>
+        <video id="video" playsinline muted hidden></video>
+        <div class="empty" id="empty" hidden>Drop pod photos here, or press <b>&nbsp;Add photos…</b></div>
+        <span class="tag" id="exampleTag" hidden>EXAMPLE PHOTO</span>
+        <div class="busy" id="busy" hidden></div>
+        <div class="zoomBar">
+          <span id="zoomLevel"></span>
+          <button id="zoomOut" title="Zoom out" aria-label="Zoom out">−</button>
+          <button id="zoomIn" title="Zoom in" aria-label="Zoom in">+</button>
+          <button id="zoomFit" title="Show the whole photo">Fit</button>
+          <button id="fullBtn" title="Show the photo full screen (Esc to leave)">Full screen</button>
+        </div>
+      </div>
+      <p class="hint" id="stageHint"></p>
+    </section>
+
+    <aside>
+      <div class="panel" aria-live="polite">
+        <div class="count"><span class="n" id="countN">–</span><span class="unit">eggs on this shot</span></div>
+        <div class="count"><span class="n pod" id="podN">–</span><span class="unit" id="podUnit">eggs on the pod</span></div>
+        <div class="meta" id="countMeta"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Pod</h2>
+        <div class="field"><label for="podId">Pod ID</label><input type="text" id="podId" spellcheck="false" autocomplete="off"></div>
+        <div class="row"><button class="small" id="newPodBtn">Next pod</button></div>
+        <p class="note">New photos go to this pod, in order: side A at rail marks 1, 2, 3, then flip and side B at 1, 2, 3.
+          Change a photo's pod or shot in the list.</p>
+        <div class="shots" id="shots"></div>
+      </div>
+
+      <div class="panel" id="cameraPanel" hidden>
+        <h2>Camera</h2>
+        <div class="row"><select id="camSelect" aria-label="Camera"></select></div>
+        <div class="row" style="margin-top:8px">
+          <button id="captureBtn" class="primary">Capture</button>
+          <button id="stopCamBtn">Stop camera</button>
+        </div>
+        <div class="meta" id="streamMeta"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Overlap between rail marks</h2>
+        <p class="note">Shots at neighbouring marks overlap. For each mark, count only between these edges (as a share of
+          the photo width) so no egg is counted twice. Shaded parts are not counted.</p>
+        <div class="field"><label for="trimPos">Mark</label><select id="trimPos"><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></div>
+        <div class="slider"><label for="trimL">Count from</label><output id="trimLOut"></output><input type="range" id="trimL" min="0" max="50" step="1"></div>
+        <div class="slider"><label for="trimR">Count to</label><output id="trimROut"></output><input type="range" id="trimR" min="50" max="100" step="1"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Magnifier</h2>
+        <canvas class="mag" id="mag" aria-label="Magnified view of the photo under the pointer"></canvas>
+        <div class="slider">
+          <label for="magZoom">Zoom</label><output id="magOut">4×</output>
+          <input type="range" id="magZoom" min="2" max="12" step="1" value="4">
+        </div>
+        <p class="note" id="magNote">Move the pointer over the photo to inspect the dots.</p>
+      </div>
+
+      <div class="panel">
+        <h2>Correct</h2>
+        <div class="row"><button id="fixBtn" aria-pressed="false">Correct mistakes</button></div>
+        <p class="note">Strike out dots that are not eggs and add the ones it missed. The count follows your corrections.</p>
+        <div class="key" id="fixKey" hidden>
+          <span><i style="background:#22e57f"></i>counted</span><span><i style="background:#ff4d4d"></i>struck out</span>
+          <span><i style="background:#3db8ff"></i>added by hand</span><span><i style="border-color:#c9d3cc"></i>dropped (too big or long)</span>
+        </div>
+        <p class="note" id="fixNote"></p>
+        <div class="row"><button class="small" id="fixClear">Clear on this photo</button></div>
+      </div>
+
+      <div class="panel">
+        <h2>Detection</h2>
+        <div class="slider">
+          <label for="eggPx">Egg size (px across)</label><output id="eggPxOut"></output>
+          <input type="range" id="eggPx" min="2" max="24" step="0.5">
+        </div>
+        <div class="slider">
+          <label for="contrast">Brighter than around it by</label><output id="contrastOut"></output>
+          <input type="range" id="contrast" min="6" max="50" step="1">
+        </div>
+        <div class="slider">
+          <label for="edge">Ignore the pod edge (egg sizes)</label><output id="edgeOut"></output>
+          <input type="range" id="edge" min="0" max="4" step="0.25">
+        </div>
+        <div class="row"><button class="small" id="autoSizeBtn">Auto egg size</button><button class="small" id="defaultsBtn">Defaults</button></div>
+        <p class="note">Auto size is the photo width ÷ 530, about right for the Arducam 16MP on the copy stand. Changes recount every photo.</p>
+      </div>
+
+      <div class="panel">
+        <h2>Show</h2>
+        <label class="check"><input type="checkbox" id="showMarks" checked> Dots on detected eggs</label>
+        <label class="check"><input type="checkbox" id="showPod" checked> Pod outline</label>
+      </div>
+
+      <div class="panel">
+        <h2>Save</h2>
+        <div class="row">
+          <button id="saveImg">Marked photo (JPG)</button>
+          <button id="saveCsv">Pods (CSV)</button>
+          <button id="saveShotsCsv">Shots (CSV)</button>
+        </div>
+        <p class="note">Photos are kept in this browser, so a refresh does not lose them.</p>
+        <p class="note" id="saveNote"></p>
+      </div>
+    </aside>
+
+  <div class="panel photos-panel">
+    <h2>Pods</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Pod</th><th style="text-align:right">A1</th><th style="text-align:right">A2</th><th style="text-align:right">A3</th>
+          <th style="text-align:right">B1</th><th style="text-align:right">B2</th><th style="text-align:right">B3</th><th style="text-align:right">Total</th></tr></thead>
+        <tbody id="podList"></tbody>
+      </table>
+    </div>
+    <h2 style="margin-top:18px">Photos</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Pod</th><th>Shot</th><th>Photo</th><th style="text-align:right">Eggs</th><th></th></tr></thead>
+        <tbody id="list"></tbody>
+      </table>
+    </div>
+    <p class="note">Photos stay in this browser; nothing is uploaded. How it counts: on the green pod, small round spots that
+      are brighter and whiter than the tissue around them; long white slivers (hairs, fibres) and large bright patches are
+      dropped. Check the dots on a few photos.</p>
+  </div>
+  </div>
+</div>
+
+<script>
+document.documentElement.lang = 'en';
+(() => {
+  const $ = id => document.getElementById(id);
+  const SHOTS = ['A1', 'A2', 'A3', 'B1', 'B2', 'B3'];
+  const DEFAULTS = { eggPx: null, contrast: 18, edge: 1.3, trim: { 1: [0, 100], 2: [0, 100], 3: [0, 100] } };
+  let settings = structuredClone(DEFAULTS), podId = 'Pod 1';
+  try {
+    const s = JSON.parse(localStorage.getItem('eggSettings') || 'null');
+    if (s) settings = { ...settings, ...s, trim: { ...DEFAULTS.trim, ...(s.trim || {}) } };
+    podId = localStorage.getItem('eggPod') || podId;
+  } catch {}
+  const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
+
+  const worker = new Worker('eggs_worker.js');
+  const pending = new Map(); let seq = 0;
+  worker.onmessage = e => { const p = pending.get(e.data.seq); if (p) { pending.delete(e.data.seq); e.data.error ? p.reject(new Error(e.data.error)) : p.resolve(e.data); } };
+  worker.onerror = e => setBusy('The counter failed to start: ' + (e.message || 'unknown error'));
+  const call = (msg, transfer) => new Promise((resolve, reject) => { msg.seq = ++seq; pending.set(seq, { resolve, reject }); worker.postMessage(msg, transfer || []); });
+
+  const photos = [];
+  let selected = null, zoom = null, nextId = 1, stream = null, fixing = false;
+  const view = $('view');
+  const setBusy = t => { $('busy').textContent = t; $('busy').hidden = !t; };
+
+  // ---------- keeping photos in this browser ----------
+  const db = new Promise(resolve => {
+    try {
+      const req = indexedDB.open('orius-eggs', 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('photos', { keyPath: 'key' });
+      req.onsuccess = () => resolve(req.result); req.onerror = () => resolve(null);
+    } catch { resolve(null); }
+  });
+  async function store(mode, fn) {
+    const d = await db; if (!d) return undefined;
+    return new Promise(resolve => {
+      try {
+        const tx = d.transaction('photos', mode), req = fn(tx.objectStore('photos'));
+        tx.oncomplete = () => resolve(req && req.result); tx.onerror = tx.onabort = () => resolve(undefined);
+      } catch { resolve(undefined); }
+    });
+  }
+  const RESULT = ['version', 'points', 'dropped', 'outline', 'scale', 'eggD', 'contrast', 'edge', 'origW', 'origH', 'ms'];
+  function savePhoto(ph) {
+    if (ph.example) return;
+    const result = ph.status === 'done' ? Object.fromEntries(RESULT.map(k => [k, ph[k]])) : null;
+    store('readwrite', s => s.put({ key: ph.key, name: ph.name, blob: ph.blob, added: ph.addedAt, pod: ph.pod, shot: ph.shot, fix: ph.fix, result }));
+  }
+
+  // ---------- adding and counting ----------
+  let queue = Promise.resolve();
+  const enqueue = fn => (queue = queue.then(fn, fn));
+  const autoPx = W => Math.max(2, Math.round(W / 530 * 2) / 2);
+  const eggPxFor = ph => settings.eggPx || autoPx(ph.origW || 1600);
+
+  function nextShot(pod) {
+    const used = new Set(photos.filter(p => !p.example && p.pod === pod).map(p => p.shot));
+    return SHOTS.find(s => !used.has(s)) || '';
+  }
+
+  function addPhoto(blob, name, opts = {}) {
+    const rec = opts.rec;
+    if (!opts.example) photos.filter(p => p.example).forEach(removePhoto);
+    const ph = { id: nextId++, name, blob, example: !!opts.example, status: 'waiting', points: [], bmp: null,
+      key: rec ? rec.key : `${Date.now()}-${nextId}`, addedAt: rec ? rec.added : Date.now(),
+      pod: rec ? rec.pod : opts.example ? 'Example' : podId, fix: rec && rec.fix || { removed: [], added: [] } };
+    ph.shot = rec ? rec.shot : opts.example ? 'A1' : nextShot(ph.pod);
+    const stored = rec && rec.result;
+    if (stored) Object.assign(ph, stored);
+    photos.push(ph);
+    if (!rec) savePhoto(ph);
+    if (!selected || selected.example || opts.select) select(ph);
+    render();
+    enqueue(async () => {
+      try {
+        ph.status = 'reading'; renderList(); setBusy(`Reading ${name}…`);
+        ph.bmp = await createImageBitmap(blob); ph.origW = ph.bmp.width; ph.origH = ph.bmp.height;
+        if (selected === ph) draw();
+        if (stored && stored.eggD === eggPxFor(ph) && stored.contrast === settings.contrast && stored.edge === settings.edge) ph.status = 'done';
+        else await countPhoto(ph);
+      } catch (err) { ph.status = 'error: ' + err.message; }
+      setBusy(''); render(); if (selected === ph) draw();
+    });
+    return ph;
+  }
+
+  async function countPhoto(ph) {
+    ph.status = 'counting'; renderList(); setBusy(`Counting eggs on ${ph.name}…`);
+    const d = eggPxFor(ph), scale = Math.min(1, 4 / d);
+    const w = Math.round(ph.origW * scale), h = Math.round(ph.origH * scale);
+    const c = new OffscreenCanvas(w, h), ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.imageSmoothingQuality = 'high'; ctx.drawImage(ph.bmp, 0, 0, w, h);
+    const rgba = ctx.getImageData(0, 0, w, h).data, rgb = new Uint8Array(w * h * 3);
+    for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) { rgb[j] = rgba[i]; rgb[j + 1] = rgba[i + 1]; rgb[j + 2] = rgba[i + 2]; }
+    const r = await call({ type: 'count', rgb: rgb.buffer, width: w, height: h, de: d * scale, contrast: settings.contrast, edge: settings.edge }, [rgb.buffer]);
+    const up = p => [(p[0] + 0.5) / scale, (p[1] + 0.5) / scale, p[2]];
+    Object.assign(ph, { points: r.points.map(up), dropped: r.dropped.map(up), outline: r.outline.map(up), version: r.version, ms: r.ms,
+      scale, eggD: d, contrast: settings.contrast, edge: settings.edge, status: 'done' });
+    savePhoto(ph);
+  }
+
+  let recountTimer = null;
+  function recountAll() {
+    clearTimeout(recountTimer);
+    recountTimer = setTimeout(() => {
+      for (const ph of [selected, ...photos.filter(p => p !== selected)]) {
+        if (!ph || !ph.bmp) continue;
+        enqueue(async () => {
+          if (ph.eggD === eggPxFor(ph) && ph.contrast === settings.contrast && ph.edge === settings.edge) return;
+          try { await countPhoto(ph); } catch (err) { ph.status = 'error: ' + err.message; }
+          setBusy(''); render(); if (selected === ph) draw();
+        });
+      }
+    }, 350);
+  }
+
+  function removePhoto(ph) {
+    const i = photos.indexOf(ph); if (i < 0) return;
+    photos.splice(i, 1);
+    if (!ph.example) store('readwrite', s => s.delete(ph.key));
+    if (selected === ph) { selected = null; zoom = null; if (photos.length) select(photos[Math.min(i, photos.length - 1)]); }
+  }
+
+  function select(ph) { if (selected !== ph) zoom = null; selected = ph; if (ph && posOf(ph)) $('trimPos').value = posOf(ph); renderTrim(); render(); draw(); }
+
+  // ---------- counting area and corrections ----------
+  const posOf = ph => (ph.shot || '')[1] || '';
+  function trimOf(ph) { const p = posOf(ph); return p ? settings.trim[p] : [0, 100]; }
+  function inArea(ph, x) { const [a, b] = trimOf(ph); return x >= a / 100 * ph.origW && x <= b / 100 * ph.origW; }
+  const markR = ph => Math.max(2, (ph.eggD || 4) * 1.5);
+  function nearest(pts, x, y, R) {
+    let best = -1, bd = R;
+    pts.forEach((p, i) => { const d = Math.hypot(p[0] - x, p[1] - y); if (d <= bd) { bd = d; best = i; } });
+    return best;
+  }
+  // kept: detected and not struck; struck: detected and struck; added: by hand. Only those inside the area count.
+  function marks(ph) {
+    const R = markR(ph), struck = new Set();
+    for (const [x, y] of ph.fix.removed) { const i = nearest(ph.points, x, y, R); if (i >= 0) struck.add(i); }
+    return { kept: ph.points.filter((_, i) => !struck.has(i)), struck: ph.points.filter((_, i) => struck.has(i)), added: ph.fix.added };
+  }
+  function countOf(ph) {
+    if (ph.status !== 'done') return null;
+    const m = marks(ph);
+    return m.kept.filter(p => inArea(ph, p[0])).length + m.added.filter(p => inArea(ph, p[0])).length;
+  }
+  function fixAt(ph, x, y) {
+    const f = ph.fix, R = markR(ph), m = marks(ph); let i;
+    if ((i = nearest(f.added, x, y, R)) >= 0) f.added.splice(i, 1);
+    else if ((i = nearest(m.struck, x, y, R)) >= 0) { const s = m.struck[i]; f.removed.splice(nearest(f.removed, s[0], s[1], R), 1); }
+    else if ((i = nearest(m.kept, x, y, R)) >= 0) f.removed.push(m.kept[i].slice(0, 2));
+    else {
+      const j = nearest(ph.dropped || [], x, y, R);
+      f.added.push(j >= 0 ? ph.dropped[j].slice(0, 2) : [x, y]);
+    }
+    savePhoto(ph); render(); draw();
+  }
+
+  // ---------- drawing ----------
+  let viewT = null;
+  function draw() {
+    queueMicrotask(drawMag);
+    const ph = selected, rect = view.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    view.width = Math.round(rect.width * dpr); view.height = Math.round(rect.height * dpr);
+    const ctx = view.getContext('2d'); ctx.clearRect(0, 0, view.width, view.height);
+    $('empty').hidden = !!ph || !$('video').hidden;
+    $('exampleTag').hidden = !(ph && ph.example);
+    $('zoomFit').disabled = $('zoomOut').disabled = !zoom;
+    $('zoomLevel').textContent = zoom ? `${zoom.s < 10 ? zoom.s.toFixed(1) : Math.round(zoom.s)}×` : '';
+    if (!ph || !ph.bmp) { viewT = null; return; }
+    let k = Math.min(view.width / ph.origW, view.height / ph.origH);
+    let ox = (view.width - ph.origW * k) / 2, oy = (view.height - ph.origH * k) / 2;
+    if (zoom) { k *= zoom.s; ox = view.width / 2 - zoom.x * k; oy = view.height / 2 - zoom.y * k; }
+    viewT = { k, ox, oy };
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(ph.bmp, ox, oy, ph.origW * k, ph.origH * k);
+    overlay(ctx, ph, (x, y) => [ox + x * k, oy + y * k], k, dpr, [view.width, view.height]);
+  }
+
+  // Everything drawn over a photo: shaded parts outside the counting area, pod outline, dots.
+  function overlay(ctx, ph, at, k, dpr, clip, dot) {
+    if (ph.status !== 'done') return;
+    const [a, b] = trimOf(ph), [x0, y0] = at(0, 0), [x1, y1] = at(ph.origW, ph.origH);
+    ctx.fillStyle = 'rgba(0,0,0,.5)';
+    if (a > 0) ctx.fillRect(x0, y0, (x1 - x0) * a / 100, y1 - y0);
+    if (b < 100) ctx.fillRect(x0 + (x1 - x0) * b / 100, y0, (x1 - x0) * (1 - b / 100), y1 - y0);
+    if ($('showPod').checked && ph.outline) {
+      ctx.fillStyle = '#ff5fd2'; const s = Math.max(1, dpr);
+      for (const [x, y] of ph.outline) { const [X, Y] = at(x, y); if (X > -2 && Y > -2 && X < clip[0] + 2 && Y < clip[1] + 2) ctx.fillRect(X - s / 2, Y - s / 2, s, s); }
+    }
+    if (!$('showMarks').checked) return;
+    const m = marks(ph), rd = dot || Math.max(2 * dpr, (ph.eggD || 4) * k * 0.45);
+    const layers = [[m.kept, '#22e57f', 'dot'], [m.added, fixing ? '#3db8ff' : '#22e57f', 'dot']];
+    if (fixing) layers.unshift([ph.dropped || [], 'rgba(220,228,222,.9)', 'ring']), layers.push([m.struck, '#ff4d4d', 'dot']);
+    for (const [pts, color, kind] of layers) {
+      ctx.beginPath();
+      for (const p of pts) {
+        const [X, Y] = at(p[0], p[1]);
+        if (X < -rd || Y < -rd || X > clip[0] + rd || Y > clip[1] + rd) continue;
+        ctx.moveTo(X + rd, Y); ctx.arc(X, Y, rd, 0, Math.PI * 2);
+      }
+      if (kind === 'dot') { ctx.fillStyle = color; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.75)'; ctx.lineWidth = Math.max(1, 0.8 * dpr); ctx.stroke(); }
+      else { ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.lineWidth = 2.5 * dpr; ctx.stroke(); ctx.strokeStyle = color; ctx.lineWidth = 1.2 * dpr; ctx.stroke(); }
+    }
+  }
+
+  // ---------- zoom, pan, click ----------
+  const ZOOM_MAX = 40, clampTo = (v, max) => Math.min(max, Math.max(0, v));
+  function zoomAt(clientX, clientY, factor) {
+    const ph = selected; if (!ph || !ph.bmp || !viewT) return;
+    const r = view.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    const sx = (clientX - r.left) * dpr, sy = (clientY - r.top) * dpr;
+    const px = (sx - viewT.ox) / viewT.k, py = (sy - viewT.oy) / viewT.k;
+    const fit = Math.min(view.width / ph.origW, view.height / ph.origH);
+    const s = Math.min(ZOOM_MAX, Math.max(1, (zoom ? zoom.s : 1) * factor));
+    if (s <= 1.001) { zoom = null; draw(); return; }
+    const k = fit * s;
+    zoom = { s, x: clampTo((view.width / 2 - sx) / k + px, ph.origW), y: clampTo((view.height / 2 - sy) / k + py, ph.origH) };
+    draw();
+  }
+  function panBy(dx, dy) {
+    const ph = selected; if (!zoom || !ph || !viewT) return;
+    const dpr = window.devicePixelRatio || 1;
+    zoom.x = clampTo(zoom.x - dx * dpr / viewT.k, ph.origW); zoom.y = clampTo(zoom.y - dy * dpr / viewT.k, ph.origH);
+    draw();
+  }
+  view.addEventListener('wheel', e => {
+    if (!selected || !selected.bmp) return;
+    if (e.ctrlKey || e.metaKey) { e.preventDefault(); zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * (Math.abs(e.deltaY) < 50 ? 0.01 : 0.002))); }
+    else if (zoom) { e.preventDefault(); const line = e.deltaMode === 1 ? 16 : 1; panBy(-e.deltaX * line, -e.deltaY * line); }
+  }, { passive: false });
+  const pointers = new Map(); let dragged = false, pinchDist = 0;
+  view.addEventListener('pointerdown', e => {
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); dragged = false;
+    if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinchDist = Math.hypot(a.x - b.x, a.y - b.y); }
+  });
+  view.addEventListener('pointermove', e => {
+    const prev = pointers.get(e.pointerId); if (!prev) return;
+    const cur = { x: e.clientX, y: e.clientY };
+    if (pointers.size === 2) {
+      pointers.set(e.pointerId, cur);
+      const [a, b] = [...pointers.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinchDist > 0) zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, d / pinchDist);
+      pinchDist = d; dragged = true; return;
+    }
+    if (!dragged && Math.hypot(cur.x - prev.x, cur.y - prev.y) < 4) return;
+    if (zoom) { if (!dragged) view.setPointerCapture(e.pointerId); dragged = true; panBy(cur.x - prev.x, cur.y - prev.y); }
+    pointers.set(e.pointerId, cur);
+  });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(t => view.addEventListener(t, e => { pointers.delete(e.pointerId); if (pointers.size < 2) pinchDist = 0; }));
+  function photoPoint(e) {
+    if (!viewT) return null;
+    const r = view.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    return { x: ((e.clientX - r.left) * dpr - viewT.ox) / viewT.k, y: ((e.clientY - r.top) * dpr - viewT.oy) / viewT.k };
+  }
+  view.addEventListener('click', e => {
+    if (dragged) { dragged = false; return; }
+    const ph = selected; if (!ph || !ph.bmp) return;
+    if (fixing && !e.shiftKey && ph.status === 'done') { const p = photoPoint(e); if (p) fixAt(ph, p.x, p.y); return; }
+    if (zoom && zoom.s >= 2.9) { zoom = null; draw(); } else zoomAt(e.clientX, e.clientY, 3 / (zoom ? zoom.s : 1));
+  });
+  const zoomCentre = f => { const r = view.getBoundingClientRect(); zoomAt(r.left + r.width / 2, r.top + r.height / 2, f); };
+  $('zoomIn').onclick = () => zoomCentre(2);
+  $('zoomOut').onclick = () => zoomCentre(0.5);
+  $('zoomFit').onclick = () => { zoom = null; draw(); };
+  $('fullBtn').onclick = () => document.fullscreenElement ? document.exitFullscreen() : $('stage').requestFullscreen().catch(() => {});
+  document.addEventListener('fullscreenchange', () => { $('fullBtn').textContent = document.fullscreenElement ? 'Exit full screen' : 'Full screen'; draw(); });
+  new ResizeObserver(() => draw()).observe($('stage'));
+
+  // ---------- magnifier ----------
+  const mag = $('mag'); let magAt = null;
+  view.addEventListener('pointermove', e => { const p = photoPoint(e); if (p) { magAt = p; drawMag(); } });
+  $('magZoom').oninput = () => { $('magOut').textContent = $('magZoom').value + '×'; drawMag(); };
+  function drawMag() {
+    const rect = mag.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    mag.width = Math.round(rect.width * dpr); mag.height = Math.round(rect.height * dpr);
+    const ctx = mag.getContext('2d'); ctx.clearRect(0, 0, mag.width, mag.height);
+    const ph = selected; if (!ph || !ph.bmp || !viewT) return;
+    const at = magAt || { x: ph.origW / 2, y: ph.origH / 2 };
+    const scale = viewT.k * +$('magZoom').value;
+    const sw = mag.width / scale, sh = mag.height / scale, sx = at.x - sw / 2, sy = at.y - sh / 2;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(ph.bmp, sx, sy, sw, sh, 0, 0, mag.width, mag.height);
+    overlay(ctx, ph, (x, y) => [(x - sx) * scale, (y - sy) * scale], scale, dpr, [mag.width, mag.height], 1.8 * dpr);
+    const cx = mag.width / 2, cy = mag.height / 2, m = 9 * dpr;
+    ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = dpr; ctx.beginPath();
+    ctx.moveTo(cx - m, cy); ctx.lineTo(cx + m, cy); ctx.moveTo(cx, cy - m); ctx.lineTo(cx, cy + m); ctx.stroke();
+    $('magNote').textContent = magAt ? `x ${Math.round(at.x)}, y ${Math.round(at.y)} · ${$('magZoom').value}× the stage view` : 'Move the pointer over the photo to inspect the dots.';
+  }
+
+  // ---------- panels and lists ----------
+  function render() { renderCount(); renderShots(); renderList(); renderPods(); renderFix(); renderSettings(); }
+  const podPhotos = pod => photos.filter(p => p.pod === pod);
+  const podTotal = pod => podPhotos(pod).reduce((a, p) => a + (countOf(p) || 0), 0);
+
+  function renderCount() {
+    const ph = selected, n = ph ? countOf(ph) : null;
+    $('countN').textContent = n == null ? '–' : n;
+    if (!ph) { $('podN').textContent = '–'; $('countMeta').textContent = 'Add pod photos or use the camera.'; return; }
+    const shots = podPhotos(ph.pod);
+    $('podN').textContent = podTotal(ph.pod); $('podUnit').textContent = `eggs on ${ph.pod}`;
+    const [a, b] = trimOf(ph);
+    $('countMeta').textContent = ph.status !== 'done' ? ph.status + '…' :
+      `${ph.example ? 'Example photo · ' : ''}Shot ${ph.shot || '–'}, ${shots.length} of 6 shots of this pod in.` +
+      `${a > 0 || b < 100 ? ` Counting ${a}–${b}% of the width.` : ''} Egg size ${ph.eggD} px, found in ${ph.ms} ms.`;
+  }
+
+  function renderShots() {
+    const el = $('shots'); el.textContent = '';
+    const have = new Map(podPhotos(podId).map(p => [p.shot, p])), next = nextShot(podId);
+    for (const s of SHOTS) {
+      const sp = document.createElement('span'), p = have.get(s);
+      sp.className = p ? 'have' : s === next ? 'next' : '';
+      sp.innerHTML = `${s}<b>${p ? countOf(p) ?? '…' : s === next ? 'next' : ''}</b>`;
+      if (p) { sp.style.cursor = 'pointer'; sp.onclick = () => select(p); }
+      el.appendChild(sp);
+    }
+  }
+
+  function renderList() {
+    const tb = $('list'); tb.textContent = '';
+    const order = [...photos].sort((a, b) => a.pod.localeCompare(b.pod, undefined, { numeric: true }) || (a.shot || 'Z').localeCompare(b.shot || 'Z') || a.addedAt - b.addedAt);
+    for (const ph of order) {
+      const tr = document.createElement('tr'); if (ph === selected) tr.className = 'sel';
+      const pod = document.createElement('input'); pod.type = 'text'; pod.value = ph.pod; pod.disabled = ph.example; pod.setAttribute('aria-label', 'Pod');
+      pod.onclick = e => e.stopPropagation();
+      pod.onchange = () => { ph.pod = pod.value.trim() || ph.pod; savePhoto(ph); render(); };
+      const shot = document.createElement('select'); shot.disabled = ph.example; shot.setAttribute('aria-label', 'Shot');
+      for (const s of ['', ...SHOTS]) shot.add(new Option(s || '–', s));
+      shot.value = ph.shot || '';
+      shot.onclick = e => e.stopPropagation();
+      shot.onchange = () => { ph.shot = shot.value; savePhoto(ph); if (selected === ph) select(ph); else render(); draw(); };
+      const td = h => { const c = document.createElement('td'); if (h instanceof Node) c.appendChild(h); else c.textContent = h; return c; };
+      tr.append(td(pod), td(shot));
+      const name = td(ph.name); name.className = 'name';
+      if (ph.status !== 'done') { const st = document.createElement('div'); st.className = 'status'; st.textContent = ph.status; name.appendChild(st); }
+      const n = td(countOf(ph) ?? '…'); n.className = 'num';
+      const btns = document.createElement('td'); btns.className = 'rowBtns';
+      const rm = document.createElement('button'); rm.className = 'small'; rm.textContent = 'Remove';
+      rm.onclick = e => { e.stopPropagation(); removePhoto(ph); render(); draw(); };
+      btns.appendChild(rm);
+      tr.append(name, n, btns);
+      tr.onclick = () => { stopCamera(); select(ph); };
+      tb.appendChild(tr);
+    }
+  }
+
+  function renderPods() {
+    const tb = $('podList'); tb.textContent = '';
+    const pods = [...new Set(photos.map(p => p.pod))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    for (const pod of pods) {
+      const tr = document.createElement('tr'); if (selected && selected.pod === pod) tr.className = 'sel';
+      const name = document.createElement('td'); name.textContent = pod; tr.appendChild(name);
+      for (const s of SHOTS) {
+        const c = document.createElement('td'); c.className = 'pods';
+        const p = photos.find(x => x.pod === pod && x.shot === s);
+        c.textContent = p ? countOf(p) ?? '…' : '–';
+        tr.appendChild(c);
+      }
+      const t = document.createElement('td'); t.className = 'pods total'; t.textContent = podTotal(pod); tr.appendChild(t);
+      tr.onclick = () => { const p = podPhotos(pod)[0]; if (p) { stopCamera(); select(p); } };
+      tb.appendChild(tr);
+    }
+    if (!pods.length) { const tr = document.createElement('tr'), c = document.createElement('td'); c.colSpan = 8; c.className = 'status'; c.textContent = 'No pods yet.'; tr.appendChild(c); tb.appendChild(tr); }
+  }
+
+  function renderFix() {
+    $('fixBtn').setAttribute('aria-pressed', fixing); $('fixBtn').textContent = fixing ? 'Done correcting' : 'Correct mistakes';
+    $('stage').classList.toggle('correcting', fixing); $('fixKey').hidden = !fixing;
+    $('stageHint').textContent = !$('video').hidden ? 'Live preview. Line the pod up with the rail mark, then press Capture.'
+      : fixing ? 'Click a dot that is not an egg to strike it out, or a missed egg to add it. Click a mark again to undo. Shift-click zooms.'
+      : 'Click to zoom 3× or back; pinch or Ctrl + scroll to zoom, scroll or drag to move around. Drop photos on it to add them.';
+    const ph = selected, f = ph && ph.fix;
+    $('fixNote').textContent = !ph || ph.status !== 'done' ? '' : f.removed.length || f.added.length
+      ? `This photo: ${f.removed.length} struck out, ${f.added.length} added (counter found ${ph.points.length}).` : 'No corrections on this photo.';
+  }
+  $('fixBtn').onclick = () => { fixing = !fixing; if (fixing) $('showMarks').checked = true; renderFix(); draw(); };
+  $('fixClear').onclick = () => { const ph = selected; if (!ph) return; ph.fix = { removed: [], added: [] }; savePhoto(ph); render(); draw(); };
+  $('showMarks').onchange = $('showPod').onchange = () => draw();
+
+  // ---------- pod ID ----------
+  $('podId').value = podId;
+  $('podId').oninput = () => { podId = $('podId').value.trim() || 'Pod'; saveSettings(); renderShots(); };
+  $('newPodBtn').onclick = () => {
+    const m = podId.match(/^(.*?)(\d+)$/);
+    let next = m ? m[1] + (+m[2] + 1) : podId + ' 2';
+    while (photos.some(p => p.pod === next)) { const k = next.match(/^(.*?)(\d+)$/); next = k[1] + (+k[2] + 1); }
+    podId = next; $('podId').value = podId; saveSettings(); renderShots();
+  };
+
+  // ---------- overlap trim, per rail mark ----------
+  function renderTrim() {
+    const [a, b] = settings.trim[$('trimPos').value];
+    $('trimL').value = a; $('trimR').value = b; $('trimLOut').textContent = a + '%'; $('trimROut').textContent = b + '%';
+  }
+  $('trimPos').onchange = renderTrim;
+  $('trimL').oninput = $('trimR').oninput = () => {
+    settings.trim[$('trimPos').value] = [+$('trimL').value, +$('trimR').value]; saveSettings();
+    renderTrim(); render(); draw();
+  };
+
+  // ---------- detection settings ----------
+  function renderSettings() {
+    const ph = selected && selected.bmp ? selected : null;
+    const px = settings.eggPx || (ph ? autoPx(ph.origW) : 3);
+    $('eggPx').value = px; $('eggPxOut').textContent = px + (settings.eggPx ? ' px' : ' px (auto)');
+    $('contrast').value = settings.contrast; $('contrastOut').textContent = settings.contrast;
+    $('edge').value = settings.edge; $('edgeOut').textContent = settings.edge;
+  }
+  $('eggPx').oninput = () => { settings.eggPx = +$('eggPx').value; saveSettings(); renderSettings(); recountAll(); };
+  $('contrast').oninput = () => { settings.contrast = +$('contrast').value; saveSettings(); renderSettings(); recountAll(); };
+  $('edge').oninput = () => { settings.edge = +$('edge').value; saveSettings(); renderSettings(); recountAll(); };
+  $('autoSizeBtn').onclick = () => { settings.eggPx = null; saveSettings(); renderSettings(); recountAll(); };
+  $('defaultsBtn').onclick = () => { const trim = settings.trim; settings = { ...structuredClone(DEFAULTS), trim }; saveSettings(); renderSettings(); recountAll(); };
+
+  // ---------- adding photos ----------
+  $('addBtn').onclick = () => $('fileInput').click();
+  $('fileInput').onchange = () => {
+    const files = [...$('fileInput').files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    stopCamera(); files.forEach(f => addPhoto(f, f.name)); $('fileInput').value = '';
+  };
+  const stage = $('stage');
+  stage.addEventListener('dragover', e => { e.preventDefault(); stage.classList.add('drag'); });
+  stage.addEventListener('dragleave', () => stage.classList.remove('drag'));
+  stage.addEventListener('drop', e => {
+    e.preventDefault(); stage.classList.remove('drag');
+    const files = [...e.dataTransfer.files].filter(f => f.type.startsWith('image/')).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    stopCamera(); files.forEach(f => addPhoto(f, f.name));
+  });
+
+  // ---------- camera ----------
+  const video = $('video'), framed = window.self !== window.top;
+  if (!framed && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) $('cameraBtn').hidden = false;
+  async function startCamera(deviceId) {
+    stopCamera();
+    const btn = $('cameraBtn'); btn.disabled = true; btn.textContent = 'Starting camera…';
+    const slow = setTimeout(() => { $('stageHint').textContent = 'Waiting for camera permission: click the camera icon at the right of the address bar and choose Allow.'; }, 1500);
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: deviceId ? { exact: deviceId } : undefined, width: { ideal: 4656 }, height: { ideal: 3496 } } });
+    } catch (err) {
+      $('stageHint').textContent = 'Camera unavailable: ' + err.message + '. Check the camera permission in the address bar, or add photos instead.';
+      return;
+    } finally { clearTimeout(slow); btn.disabled = false; btn.textContent = 'Use camera'; }
+    video.srcObject = stream; await video.play();
+    video.hidden = false; view.hidden = true; $('cameraPanel').hidden = false;
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+    const sel = $('camSelect'); sel.textContent = '';
+    for (const d of devs) sel.add(new Option(d.label || 'Camera', d.deviceId));
+    sel.value = stream.getVideoTracks()[0].getSettings().deviceId || '';
+    $('streamMeta').textContent = `${video.videoWidth} × ${video.videoHeight}`;
+    renderCaptureBtn(); renderFix(); draw();
+  }
+  function stopCamera() {
+    if (!stream) return;
+    stream.getTracks().forEach(t => t.stop()); stream = null;
+    video.hidden = true; view.hidden = false; $('cameraPanel').hidden = true;
+    renderFix(); draw();
+  }
+  const renderCaptureBtn = () => { const s = nextShot(podId); $('captureBtn').textContent = s ? `Capture ${podId} · ${s}` : `Capture (${podId} has 6 shots)`; };
+  $('cameraBtn').onclick = () => startCamera();
+  $('camSelect').onchange = () => startCamera($('camSelect').value);
+  $('stopCamBtn').onclick = stopCamera;
+  $('captureBtn').onclick = async () => {
+    if (!stream || !video.videoWidth) return;
+    const c = document.createElement('canvas'); c.width = video.videoWidth; c.height = video.videoHeight;
+    c.getContext('2d').drawImage(video, 0, 0);
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.95));
+    const shot = nextShot(podId), stamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '_');
+    const name = `${podId.replace(/[^\w-]+/g, '_')}_${shot || 'extra'}_${stamp}.jpg`;
+    addPhoto(blob, name, { select: false });
+    $('saveNote').textContent = `Captured ${name}.`;
+    renderCaptureBtn(); renderShots();
+  };
+  $('podId').addEventListener('input', renderCaptureBtn);
+  $('newPodBtn').addEventListener('click', renderCaptureBtn);
+
+  // ---------- saving ----------
+  function download(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); }
+  const csvCell = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
+  const csv = rows => new Blob([rows.map(r => r.map(csvCell).join(',')).join('\n') + '\n'], { type: 'text/csv' });
+  const real = () => photos.filter(p => !p.example);
+  $('saveImg').onclick = async () => {
+    const ph = selected; if (!ph || !ph.bmp) return;
+    const c = document.createElement('canvas'); c.width = ph.origW; c.height = ph.origH;
+    const ctx = c.getContext('2d'); ctx.drawImage(ph.bmp, 0, 0);
+    const wasFixing = fixing; fixing = false;
+    overlay(ctx, ph, (x, y) => [x, y], 1, Math.max(1, ph.origW / 1600), [c.width, c.height], Math.max(2, ph.eggD * 0.45));
+    fixing = wasFixing;
+    const fs = Math.round(ph.origW / 40);
+    ctx.font = `600 ${fs}px sans-serif`; ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(0, 0, fs * 14, fs * 1.6);
+    ctx.fillStyle = '#fff'; ctx.fillText(`${ph.pod} ${ph.shot}: ${countOf(ph)} eggs`, fs * 0.4, fs * 1.15);
+    download(await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92)), ph.name.replace(/\.\w+$/, '') + '_eggs.jpg');
+  };
+  $('saveCsv').onclick = () => {
+    const pods = [...new Set(real().map(p => p.pod))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    if (!pods.length) { $('saveNote').textContent = 'No pod photos yet (the example is not saved).'; return; }
+    const rows = [['pod', ...SHOTS, 'total_eggs', 'shots']];
+    for (const pod of pods) {
+      const cells = SHOTS.map(s => { const p = real().find(x => x.pod === pod && x.shot === s); return p ? countOf(p) ?? '' : ''; });
+      rows.push([pod, ...cells, podTotal(pod), podPhotos(pod).length]);
+    }
+    download(csv(rows), `orius_eggs_pods_${new Date().toISOString().slice(0, 10)}.csv`);
+  };
+  $('saveShotsCsv').onclick = () => {
+    const rows = [['pod', 'shot', 'photo', 'eggs', 'detected', 'struck_out', 'added', 'egg_px', 'contrast', 'count_from_pct', 'count_to_pct']];
+    for (const p of real()) { const [a, b] = trimOf(p); rows.push([p.pod, p.shot, p.name, countOf(p) ?? '', p.points.length, p.fix.removed.length, p.fix.added.length, p.eggD, p.contrast, a, b]); }
+    if (rows.length < 2) { $('saveNote').textContent = 'No pod photos yet (the example is not saved).'; return; }
+    download(csv(rows), `orius_eggs_shots_${new Date().toISOString().slice(0, 10)}.csv`);
+  };
+
+  // ---------- start: photos from earlier visits, or the example ----------
+  renderTrim(); renderSettings(); render(); draw();
+  (async () => {
+    const recs = (await store('readonly', s => s.getAll())) || [];
+    recs.sort((a, b) => a.added - b.added);
+    for (const rec of recs) addPhoto(rec.blob, rec.name, { rec });
+    if (!recs.length) {
+      try { const r = await fetch('eggs_sample.jpg'); if (r.ok) addPhoto(await r.blob(), 'eggs_sample.jpg', { example: true }); } catch {}
+    }
+    if (!photos.length) render();
+  })();
+})();
+</script>
