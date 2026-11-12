@@ -189,8 +189,9 @@
       <div class="panel">
         <h2>Pod</h2>
         <div class="field"><label for="podId">Pod ID</label><input type="text" id="podId" spellcheck="false" autocomplete="off"></div>
-        <div class="row"><button class="small" id="newPodBtn">Next pod</button></div>
+        <div class="row"><button class="small" id="flipBtn">Side B next</button><button class="small" id="newPodBtn">Next pod</button></div>
         <p class="note">New photos go to this pod, in order: side A at rail marks 1, 2, 3, then flip and side B at 1, 2, 3.
+          A short pod that needs only marks 1 and 2: press <b>Side B next</b> after A2.
           Change a photo's pod or shot in the list.</p>
         <div class="shots" id="shots"></div>
       </div>
@@ -211,6 +212,9 @@
         <p class="note">Shots at neighbouring marks of the same side overlap. Each overlap is split down the middle, so every
           egg is counted once; shaded parts are not counted.</p>
         <p class="note" id="matchNote"></p>
+        <p class="note">Every clear match is remembered for its pair of marks, and used where a pair cannot be matched,
+          such as a short pod with only plain card in the overlap.</p>
+        <div class="row"><button class="small" id="forgetBtn">Forget remembered overlaps</button></div>
         <p class="note">Where no match is found (or matching is off), count between these edges for each mark:</p>
         <div class="field"><label for="trimPos">Mark</label><select id="trimPos"><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></div>
         <div class="slider"><label for="trimL">Count from</label><output id="trimLOut"></output><input type="range" id="trimL" min="0" max="50" step="1"></div>
@@ -353,9 +357,12 @@ document.documentElement.lang = 'en';
   const autoPx = W => Math.max(2, Math.round(W / 530 * 2) / 2);
   const eggPxFor = ph => settings.eggPx || autoPx(ph.origW || 1600);
 
+  // A short pod may need only 1 or 2 marks per side: "Side B next" (or any B shot already in) moves on to side B.
+  const flipped = new Set();
+  function onSideB(pod) { return flipped.has(pod) || photos.some(p => !p.example && p.pod === pod && (p.shot || '')[0] === 'B'); }
   function nextShot(pod) {
     const used = new Set(photos.filter(p => !p.example && p.pod === pod).map(p => p.shot));
-    return SHOTS.find(s => !used.has(s)) || '';
+    return SHOTS.filter(s => !onSideB(pod) || s[0] === 'B').find(s => !used.has(s)) || '';
   }
 
   function addPhoto(blob, name, opts = {}) {
@@ -453,10 +460,34 @@ document.documentElement.lang = 'en';
           // a clear peak: decent correlation, well above the best other shift
           const ok = r.score > 0.25 && r.score - Math.max(0, r.second) > 0.08;
           matches.set(key, { s: r.s * k, dy: r.dy * k, score: r.score, second: r.second, ok });
+          if (ok && !a.example) learn(a, key, r.s / a.thumb.w);
         })
         .catch(err => matches.set(key, { ok: false, why: err.message }))
         .finally(() => { render(); draw(); });
     }
+  }
+  // The rail marks are fixed, so the shift between two marks is the same for every pod. Good matches are remembered
+  // per mark pair (the last 20); where a pair cannot be matched (a short pod: little or no pod in the overlap, only
+  // the plain card) the remembered shift is used instead.
+  function learn(a, key, frac) {
+    const pair = `${posOf(a)}-${+posOf(a) + 1}`, L = settings.learned = settings.learned || {};
+    const m = L[pair] = L[pair] || {};
+    delete m[key]; m[key] = frac;
+    const keys = Object.keys(m); while (keys.length > 20) delete m[keys.shift()];
+    saveSettings();
+  }
+  function learnedShift(a) {
+    const m = settings.learned && settings.learned[`${posOf(a)}-${+posOf(a) + 1}`];
+    const v = m ? Object.values(m).sort((x, y) => x - y) : [];
+    return v.length ? { frac: v[v.length >> 1], n: v.length } : null;
+  }
+  // shift used for the a-b overlap: the match when clear, else the remembered shift for that mark pair
+  function shiftFor(a, b) {
+    if (!a || !b) return null;
+    const m = matchOf(a, b);
+    if (m && m.ok) return { s: m.s, src: 'match' };
+    const l = learnedShift(a);
+    return l ? { s: l.frac * a.origW, src: 'learned' } : null;
   }
   const matchOf = (a, b) => { const m = a && b && matches.get(a.key + '|' + b.key); return m && m !== 'pending' ? m : null; };
 
@@ -471,9 +502,9 @@ document.documentElement.lang = 'en';
     let x0 = ta / 100 * W, x1 = tb / 100 * W;
     if (settings.autoOverlap) {
       const next = neighbour(ph, 1), prev = neighbour(ph, -1);
-      const mn = matchOf(ph, next), mp = matchOf(prev, ph);
-      if (mn && mn.ok) { const c = (W + mn.s) / 2; if (mn.s > 0) x1 = c; else x0 = c; }
-      if (mp && mp.ok) { const c = (W - mp.s) / 2; if (mp.s > 0) x0 = c; else x1 = c; }
+      const mn = shiftFor(ph, next), mp = shiftFor(prev, ph);
+      if (mn) { const c = (W + mn.s) / 2; if (mn.s > 0) x1 = c; else x0 = c; }
+      if (mp) { const c = (W - mp.s) / 2; if (mp.s > 0) x0 = c; else x1 = c; }
     }
     return [x0, x1];
   }
@@ -666,7 +697,11 @@ document.documentElement.lang = 'en';
       const q = neighbour(ph, step); if (!q) continue;
       const m = step > 0 ? matches.get(ph.key + '|' + q.key) : matches.get(q.key + '|' + ph.key);
       if (!m || m === 'pending') parts.push(`${q.shot}: matching…`);
-      else if (!m.ok) parts.push(`${q.shot}: no clear match${m.why ? ` (${m.why})` : m.score != null ? ` (score ${m.score.toFixed(2)})` : ''}, using the mark setting`);
+      else if (!m.ok) {
+        const l = learnedShift(step > 0 ? ph : q);
+        parts.push(`${q.shot}: no clear match${m.why ? ` (${m.why})` : m.score != null ? ` (score ${m.score.toFixed(2)})` : ''}, ` +
+          (l ? `using the overlap remembered from ${l.n} earlier match${l.n > 1 ? 'es' : ''} (${Math.round((1 - Math.abs(l.frac)) * 100)}%)` : 'using the mark setting'));
+      }
       else parts.push(`${q.shot}: overlap ${Math.round((1 - Math.abs(m.s) / ph.origW) * 100)}% of the width, match ${m.score.toFixed(2)}`);
     }
     el.textContent = parts.length ? `This shot (${ph.shot}) · ` + parts.join(' · ') : ph.shot ? `This shot (${ph.shot}) has no neighbouring shot yet.` : '';
@@ -674,6 +709,8 @@ document.documentElement.lang = 'en';
 
   function renderShots() {
     const el = $('shots'); el.textContent = '';
+    const hasB = photos.some(p => !p.example && p.pod === podId && (p.shot || '')[0] === 'B');
+    $('flipBtn').hidden = hasB; $('flipBtn').textContent = flipped.has(podId) ? 'Back to side A' : 'Side B next';
     const have = new Map(podPhotos(podId).map(p => [p.shot, p])), next = nextShot(podId);
     for (const s of SHOTS) {
       const sp = document.createElement('span'), p = have.get(s);
@@ -762,6 +799,7 @@ document.documentElement.lang = 'en';
   }
   $('trimPos').onchange = renderTrim;
   $('autoOverlap').checked = settings.autoOverlap;
+  $('forgetBtn').onclick = () => { settings.learned = {}; saveSettings(); render(); draw(); $('saveNote').textContent = 'Remembered overlaps cleared (use this after moving the rail marks).'; };
   $('autoOverlap').onchange = () => { settings.autoOverlap = $('autoOverlap').checked; saveSettings(); updateMatches(); render(); draw(); };
   $('trimL').oninput = $('trimR').oninput = () => {
     settings.trim[$('trimPos').value] = [+$('trimL').value, +$('trimR').value]; saveSettings();
@@ -781,7 +819,7 @@ document.documentElement.lang = 'en';
   $('contrast').oninput = () => { settings.contrast = +$('contrast').value; saveSettings(); renderSettings(); recountAll(); };
   $('edge').oninput = () => { settings.edge = +$('edge').value; saveSettings(); renderSettings(); recountAll(); };
   $('autoSizeBtn').onclick = () => { settings.eggPx = null; saveSettings(); renderSettings(); recountAll(); };
-  $('defaultsBtn').onclick = () => { const trim = settings.trim; settings = { ...structuredClone(DEFAULTS), trim }; saveSettings(); renderSettings(); recountAll(); };
+  $('defaultsBtn').onclick = () => { const { trim, learned } = settings; settings = { ...structuredClone(DEFAULTS), trim, learned }; saveSettings(); renderSettings(); recountAll(); };
 
   // ---------- adding photos ----------
   $('addBtn').onclick = () => $('fileInput').click();
@@ -843,6 +881,7 @@ document.documentElement.lang = 'en';
   };
   $('podId').addEventListener('input', renderCaptureBtn);
   $('newPodBtn').addEventListener('click', renderCaptureBtn);
+  $('flipBtn').onclick = () => { if (flipped.has(podId)) flipped.delete(podId); else flipped.add(podId); renderShots(); renderCaptureBtn(); };
 
   // ---------- saving ----------
   function download(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); }
