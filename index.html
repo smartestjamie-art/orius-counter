@@ -244,6 +244,29 @@
       </div>
 
       <div class="panel">
+        <h2>Check double dots</h2>
+        <p class="note">Steps through every pair of dots that sit close together with no light gap between them, where one
+          insect most often gets two dots. Answer each one; the answers correct the count and are exported with the
+          corrections, to train an automatic check later.</p>
+        <div class="row"><button id="pairBtn" aria-pressed="false">Review close pairs</button></div>
+        <div id="pairPanel" hidden>
+          <p class="meta" id="pairMeta"></p>
+          <div class="row" id="pairAnswers">
+            <button class="small" id="pairTwo">Two insects <kbd>2</kbd></button>
+            <button class="small" id="pairOne">One insect <kbd>1</kbd></button>
+            <button class="small" id="pairOneAdult" hidden>One adult <kbd>A</kbd></button>
+            <button class="small" id="pairOneNymph" hidden>One nymph <kbd>N</kbd></button>
+          </div>
+          <div class="row">
+            <button class="small" id="pairPrev">◀ Previous</button>
+            <button class="small" id="pairNext">Next ▶</button>
+            <button class="small" id="pairNextOpen">Next unanswered</button>
+          </div>
+        </div>
+        <p class="note" id="pairNote"></p>
+      </div>
+
+      <div class="panel">
         <h2>Thresholds</h2>
         <div class="slider">
           <label for="gray">Gray &lt;</label><output id="grayOut">90</output>
@@ -461,6 +484,7 @@ document.documentElement.lang = 'en';
       const r = Math.max(3.5 * dpr, 9 * (ph.dish[2] / REF_R) * s * k);
       strokeMarks(ctx, ph, (x, y) => [ox + x * s * k, oy + y * s * k], r, Math.max(1.2, 1.4 * dpr), dpr);
     }
+    if (review && review.ph === ph) drawPairs(ctx, (x, y) => [ox + x * s * k, oy + y * s * k], s * k, dpr);
   }
 
   // Dots on the counted insects; while correcting also struck-out, hand-added and dropped candidates.
@@ -488,11 +512,12 @@ document.documentElement.lang = 'en';
   const NYMPH_COLOR = '#ffb020';
   const nymphsKept = ph => (ph.fix.kept || ph.points).filter(c => c[4]).length + ph.fix.added.filter(a => a[2]).length;
   const adultsKept = ph => ph.count - nymphsKept(ph);
-  const hasFix = f => f.removed.length || f.added.length || (f.retyped || []).length;
+  const hasFix = f => f.removed.length || f.added.length || (f.retyped || []).length || (f.pairs || []).length;
   const ratio = ph => `${nymphsKept(ph)} : ${adultsKept(ph)}${adultsKept(ph) ? ` (${(nymphsKept(ph) / adultsKept(ph)).toFixed(2)})` : ''}`;
 
   // ---------- corrections: struck-out and added points, kept in analysed-photo pixels ----------
   let fixing = false;
+  let review = null; // close-pair review: { ph, pairs: [{ a, b, gap, d }], at }
   const markRadius = ph => 9 * ph.dish[2] / REF_R;
   function nearest(pts, x, y, R) {
     let best = -1, bd = R;
@@ -552,8 +577,9 @@ document.documentElement.lang = 'en';
       : 'Pinch (or Ctrl + scroll) to zoom, scroll or drag to move around, click to zoom 3× or back. Drop photos on it to add them.';
     const ph = selected, f = ph && ph.fix;
     $('fixNote').textContent = !f || !ph.cands ? '' : hasFix(f)
-      ? `This photo: ${f.struck.length} struck out, ${f.added.length} added${f.retyped.length ? `, ${f.retyped.length} switched adult ↔ nymph` : ''} (counter found ${ph.autoCount}).` : 'No corrections on this photo.';
+      ? `This photo: ${f.struck.length} struck out, ${f.added.length} added${f.retyped.length ? `, ${f.retyped.length} switched adult ↔ nymph` : ''}${(f.pairs || []).length ? `, ${f.pairs.length} close pairs answered` : ''} (counter found ${ph.autoCount}).` : 'No corrections on this photo.';
     const n = photos.filter(p => hasFix(p.fix)).length;
+    renderPairNote();
     $('fixExport').disabled = !n; $('fixExport').textContent = n ? `Export corrections (${n} photo${n > 1 ? 's' : ''})` : 'Export corrections';
   }
 
@@ -564,7 +590,7 @@ document.documentElement.lang = 'en';
   };
   $('fixClear').onclick = () => {
     const ph = selected; if (!ph || !hasFix(ph.fix)) return;
-    ph.fix.removed = []; ph.fix.added = []; ph.fix.retyped = []; applyFix(ph); savePhoto(ph);
+    ph.fix.removed = []; ph.fix.added = []; ph.fix.retyped = []; ph.fix.pairs = []; applyFix(ph); savePhoto(ph); if (review && review.ph === ph) stopReview();
     draw(); renderCount(); renderList(); renderFix(); autoSave(ph);
   };
   // One JSON file: for every corrected photo, each candidate's classifier inputs and its label. No pixels.
@@ -574,12 +600,163 @@ document.documentElement.lang = 'en';
     const out = { format: 'orius-corrections-1', exported: new Date().toISOString(), features: done[0].featureNames,
       photos: done.map(p => ({ name: p.name, width: p.origW, height: p.origH, analysed_width: p.prepW, dish: p.dish,
         gray: p.gray, core: p.core, auto_count: p.autoCount, count: p.count,
-        removed: p.fix.removed, added: p.fix.added, retyped: p.fix.retyped, added_without_candidate: p.fix.added.length - p.fix.restored.length,
+        removed: p.fix.removed, added: p.fix.added, retyped: p.fix.retyped, pairs: p.fix.pairs || [], added_without_candidate: p.fix.added.length - p.fix.restored.length,
         candidates: p.cands.map((c, i) => ({ x: +c[0].toFixed(1), y: +c[1].toFixed(1), p_insect: +c[2].toFixed(4),
           dropped: ['', 'straw', 'classifier', 'nymph double'][c[3]] || null, kind: c[4] ? 'nymph' : 'adult', kind_by_hand: p.fix.kinds[i], label: p.fix.labels[i], features: p.feats[i] })) })) };
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
     offer(`orius_corrections_${stamp}.json`, new Blob([JSON.stringify(out)], { type: 'application/json' }));
   };
+
+  // ---------- check double dots: close pairs with no light gap, answered one by one ----------
+  // A pair: two counted dots closer than PAIR.near (reference px) where the brightest point on the way from one to the
+  // other (best of three parallel lines) is at most PAIR.gap above the lighter end. On the hand-corrected photos this
+  // caught about 80 % of the dots struck out as a second dot on one insect.
+  const PAIR = { near: 14, gap: 6, half: 20 };
+  const pairCanvas = document.createElement('canvas');
+  const pairCtx = pairCanvas.getContext('2d', { willReadFrequently: true });
+
+  function pairGap(ph, a, b) {
+    const s = ph.origW / ph.prepW, H = PAIR.half, n = 2 * H + 1;
+    const mx = Math.round((a[0] + b[0]) / 2), my = Math.round((a[1] + b[1]) / 2), x0 = mx - H, y0 = my - H;
+    pairCanvas.width = pairCanvas.height = n;
+    pairCtx.imageSmoothingQuality = 'high';
+    pairCtx.drawImage(ph.bmp, x0 * s, y0 * s, n * s, n * s, 0, 0, n, n);
+    const d = pairCtx.getImageData(0, 0, n, n).data;
+    const L = (x, y) => { x = Math.min(n - 1, Math.max(0, Math.round(x - x0))); y = Math.min(n - 1, Math.max(0, Math.round(y - y0))); const i = 4 * (y * n + x); return (d[i] + d[i + 1] + d[i + 2]) / 3; };
+    const spot = q => { let t = 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) t += L(q[0] + dx, q[1] + dy); return t / 9; };
+    const dist = Math.hypot(b[0] - a[0], b[1] - a[1]), m = Math.max(2, Math.floor(2 * dist));
+    const nx = dist > 0.5 ? -(b[1] - a[1]) / dist : 0, ny = dist > 0.5 ? (b[0] - a[0]) / dist : 0;
+    let best = Infinity;
+    for (const off of [-1.5, 0, 1.5]) {
+      let top = -Infinity;
+      for (let t = 0; t <= m; t++) top = Math.max(top, L(a[0] + nx * off + (b[0] - a[0]) * t / m, a[1] + ny * off + (b[1] - a[1]) * t / m));
+      best = Math.min(best, top);
+    }
+    return best - Math.max(spot(a), spot(b));
+  }
+
+  const samePt = (p, q) => Math.abs(p[0] - q[0]) < 0.6 && Math.abs(p[1] - q[1]) < 0.6;
+  function pairAnswer(ph, pr) {
+    return (ph.fix.pairs || []).find(r => (samePt(r.a, pr.a) && samePt(r.b, pr.b)) || (samePt(r.a, pr.b) && samePt(r.b, pr.a)));
+  }
+
+  // Counted dots plus those struck by a "one insect" answer, so answered pairs stay in the list.
+  function findPairs(ph) {
+    const struckByAnswer = ph.fix.struck.filter(c => (ph.fix.pairs || []).some(r => r.struck && samePt(r.struck, c)));
+    const pts = ph.fix.kept.concat(struckByAnswer), near = PAIR.near * ph.dish[2] / REF_R, out = [];
+    const grid = new Map(), key = (i, j) => i + ',' + j;
+    pts.forEach((p, k) => { const kk = key(Math.floor(p[0] / near), Math.floor(p[1] / near)); (grid.get(kk) || grid.set(kk, []).get(kk)).push(k); });
+    pts.forEach((p, k) => {
+      const gx = Math.floor(p[0] / near), gy = Math.floor(p[1] / near);
+      for (let i = gx - 1; i <= gx + 1; i++) for (let j = gy - 1; j <= gy + 1; j++) for (const o of grid.get(key(i, j)) || []) {
+        if (o <= k) continue;
+        const q = pts[o], d = Math.hypot(q[0] - p[0], q[1] - p[1]);
+        if (d >= near) continue;
+        const gap = pairGap(ph, p, q);
+        if (gap <= PAIR.gap) out.push({ a: p, b: q, gap, d });
+      }
+    });
+    // in bands from top to bottom, left to right within a band, so Next moves across the dish in order
+    const band = pr => Math.round((pr.a[1] + pr.b[1]) / 80);
+    return out.sort((u, v) => band(u) - band(v) || (u.a[0] + u.b[0]) - (v.a[0] + v.b[0]));
+  }
+
+  function startReview() {
+    const ph = selected;
+    if (!ph || !ph.bmp || !ph.cands || !ph.fix.kept) { $('pairNote').textContent = 'Open a counted photo first.'; return; }
+    ph.fix.pairs = ph.fix.pairs || [];
+    $('pairNote').textContent = 'Looking for close pairs…';
+    setTimeout(() => {
+      const pairs = findPairs(ph);
+      review = { ph, pairs, at: 0 };
+      const open = pairs.findIndex(pr => !pairAnswer(ph, pr));
+      review.at = open >= 0 ? open : 0;
+      if (!fixing) { fixing = true; $('showMarks').checked = true; renderFix(); }
+      showPair();
+    }, 20);
+  }
+  function stopReview() {
+    review = null; $('pairPanel').hidden = true; $('pairBtn').setAttribute('aria-pressed', 'false'); $('pairBtn').textContent = 'Review close pairs';
+    renderPairNote(); draw();
+  }
+  function renderPairNote() {
+    if (review) return;
+    const ph = selected, f = ph && ph.fix, n = f && f.pairs ? f.pairs.length : 0;
+    $('pairNote').textContent = n ? `This photo: ${n} close pair${n > 1 ? 's' : ''} answered, ${f.pairs.filter(r => r.one).length} of them one insect.` : '';
+  }
+
+  function showPair() {
+    const r = review; if (!r) return;
+    $('pairPanel').hidden = false; $('pairBtn').setAttribute('aria-pressed', 'true'); $('pairBtn').textContent = 'Stop reviewing';
+    if (!r.pairs.length) { $('pairMeta').textContent = 'No close pairs without a gap on this photo.'; $('pairAnswers').hidden = true; $('pairNote').textContent = ''; draw(); return; }
+    $('pairAnswers').hidden = false;
+    const pr = r.pairs[r.at], ans = pairAnswer(r.ph, pr), done = r.pairs.filter(p => pairAnswer(r.ph, p)).length;
+    const mixed = !!pr.a[4] !== !!pr.b[4];
+    $('pairOne').hidden = mixed; $('pairOneAdult').hidden = $('pairOneNymph').hidden = !mixed;
+    for (const id of ['pairTwo', 'pairOne', 'pairOneAdult', 'pairOneNymph']) $(id).classList.remove('primary');
+    if (ans) $(ans.one ? (mixed ? (ans.kind === 'nymph' ? 'pairOneNymph' : 'pairOneAdult') : 'pairOne') : 'pairTwo').classList.add('primary');
+    $('pairMeta').textContent = `Pair ${r.at + 1} of ${r.pairs.length} · ${done} answered` + (ans ? ` · this one: ${ans.one ? 'one insect' : 'two insects'}` : '');
+    $('pairNote').textContent = `Yellow ring: the pair to answer; thin rings: the others. Keys: ${mixed ? 'A one adult, N one nymph' : '1 one insect'}, 2 two insects, ← → move, Esc stop.`;
+    const s = r.ph.origW / r.ph.prepW; // zoom onto the pair
+    zoom = { s: Math.max(zoom ? zoom.s : 0, 10), x: (pr.a[0] + pr.b[0]) / 2 * s, y: (pr.a[1] + pr.b[1]) / 2 * s };
+    magAt = { x: zoom.x, y: zoom.y }; magPin = null;
+    draw();
+  }
+
+  function drawPairs(ctx, at, k, dpr) {
+    const r = review, R = Math.max(10 * dpr, 13 * k);
+    r.pairs.forEach((pr, i) => {
+      const [X, Y] = at((pr.a[0] + pr.b[0]) / 2, (pr.a[1] + pr.b[1]) / 2), cur = i === r.at, done = pairAnswer(r.ph, pr);
+      ctx.beginPath(); ctx.arc(X, Y, cur ? R * 1.25 : R, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.lineWidth = (cur ? 5 : 3) * dpr; ctx.stroke();
+      ctx.strokeStyle = cur ? '#ffe14d' : done ? 'rgba(255,225,77,.35)' : 'rgba(255,225,77,.85)'; ctx.lineWidth = (cur ? 2.5 : 1.2) * dpr; ctx.stroke();
+    });
+  }
+
+  // one: the pair is one insect; keep: 'adult' or 'nymph' on a mixed pair (the other kind's dot is struck)
+  function answerPair(one, keep) {
+    const r = review; if (!r || !r.pairs.length) return;
+    const ph = r.ph, f = ph.fix, pr = r.pairs[r.at], old = pairAnswer(ph, pr);
+    if (old) { // replace the earlier answer, and its strike
+      if (old.struck) { const i = f.removed.findIndex(q => samePt(q, old.struck)); if (i >= 0) f.removed.splice(i, 1); }
+      f.pairs.splice(f.pairs.indexOf(old), 1);
+    }
+    const rec = { a: [pr.a[0], pr.a[1], pr.a[4] ? 1 : 0], b: [pr.b[0], pr.b[1], pr.b[4] ? 1 : 0], gap: +pr.gap.toFixed(1), d: +pr.d.toFixed(1), one };
+    if (one) {
+      const strike = keep ? (!!pr.a[4] === (keep === 'nymph') ? pr.b : pr.a) : pr.b;
+      rec.kind = keep || (pr.a[4] ? 'nymph' : 'adult'); rec.struck = strike.slice(0, 2);
+      if (!f.removed.some(q => samePt(q, strike))) f.removed.push(strike.slice(0, 2));
+    }
+    f.pairs.push(rec);
+    applyFix(ph); savePhoto(ph); renderCount(); renderList(); renderFix();
+    clearTimeout(fixAt.t); fixAt.t = setTimeout(() => autoSave(ph), 1500);
+    const next = r.pairs.findIndex((p, i) => i > r.at && !pairAnswer(ph, p));
+    if (next >= 0) r.at = next;
+    showPair();
+    if (r.pairs.every(p => pairAnswer(ph, p))) $('pairNote').textContent = `All ${r.pairs.length} close pairs on this photo are answered.`;
+  }
+
+  $('pairBtn').onclick = () => review ? stopReview() : startReview();
+  $('pairTwo').onclick = () => answerPair(false);
+  $('pairOne').onclick = () => answerPair(true);
+  $('pairOneAdult').onclick = () => answerPair(true, 'adult');
+  $('pairOneNymph').onclick = () => answerPair(true, 'nymph');
+  $('pairPrev').onclick = () => { if (review && review.at > 0) { review.at--; showPair(); } };
+  $('pairNext').onclick = () => { if (review && review.at < review.pairs.length - 1) { review.at++; showPair(); } };
+  $('pairNextOpen').onclick = () => {
+    if (!review || !review.pairs.length) return;
+    const n = review.pairs.length;
+    for (let k = 1; k <= n; k++) { const i = (review.at + k) % n; if (!pairAnswer(review.ph, review.pairs[i])) { review.at = i; showPair(); return; } }
+    $('pairNote').textContent = 'Every close pair on this photo is answered.';
+  };
+  document.addEventListener('keydown', e => {
+    if (!review || (e.target.closest && e.target.closest('input, textarea, select')) || e.metaKey || e.ctrlKey || e.altKey) return;
+    const pr = review.pairs[review.at], mixed = !!pr && !!pr.a[4] !== !!pr.b[4];
+    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    const act = { '1': () => !mixed && answerPair(true), '2': () => answerPair(false), a: () => mixed && answerPair(true, 'adult'),
+      n: () => mixed && answerPair(true, 'nymph'), ArrowLeft: () => $('pairPrev').click(), ArrowRight: () => $('pairNext').click(), Escape: () => stopReview() }[key];
+    if (act) { e.preventDefault(); act(); }
+  });
 
   view.addEventListener('click', e => {
     const ph = selected; if (!ph || !ph.bmp) return;
@@ -805,6 +982,7 @@ document.documentElement.lang = 'en';
 
   // Choosing a photo shows it: the camera preview, which hides the photo view, is stopped (Use camera brings it back).
   function select(ph) {
+    if (review && review.ph !== ph) stopReview();
     selected = ph; zoom = null; magPin = null;
     if (stream && !capturing) stopCamera();
     draw(); renderCount(); renderList(); renderFix();
