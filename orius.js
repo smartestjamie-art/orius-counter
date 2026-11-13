@@ -9,7 +9,7 @@
 
   // Counter version, stored with every result so a photo keeps the count it was given. Change it whenever
   // detection, splitting or the debris model (debris_model.js) changes.
-  const VERSION = '2026-11-13a';
+  const VERSION = '2026-11-13b';
   const REFERENCE_RADIUS = 699; // outer dish rim in the notebook's photo
   const DEFAULTS = { background_sigma: 12, gray_threshold: 75, contrast_threshold: 32, component_min_area: 55,
     core_threshold: 50, core_min_pixels: 25 };
@@ -29,7 +29,9 @@
   // Backlit: two adult dots closer than near (reference px) with no light gap between them (the brightest point on the
   // way, best of three parallel lines, at most gap above the lighter end) are one insect. From the close-pair review of
   // AQ (12 Nov): 22 of 26 such adult pairs were one insect; adult-nymph and nymph pairs were mostly two, so they stay.
-  const PAIRS = { near: 14, gap: 4.5 };
+  // AR (12 Nov) agreed: 24 of 27. Also from both reviews: a nymph dot on a pale spot (mean of 5 x 5 at least pale)
+  // touching an adult (gap at most pale_gap) is that adult's wing, not a nymph: 7 of 7.
+  const PAIRS = { near: 14, gap: 4.5, pale: 140, pale_gap: 6 };
   // Nymphs, counted on request: warm blobs that are not black adults (photobooth_count.NYMPH).
   const NYMPH = { level: 215, sigma: 1.2, local_sigma: 10, min_tan: 30, min_hue: 0.5, max_blue: 160, min_area: 15, max_sat: 0.9,
     clump: 1.1, max_clump: 6, wall: { sectors: 120, step: 4, outer: 0.75, coverage: 0.33, run: 3, filled: 6 },
@@ -1118,37 +1120,57 @@
     const nymphs = opts.nymphs ? findNymphs(prep.rgb, w, h, p.gray_threshold, cx, cy, r, adults, !!ring) : [];
     for (const i of nymphDoubles(prep.rgb, w, h, adults, nymphs, s)) adults[i].dropped = 'double';
     if (ring) for (const d of adultPairs(prep.rgb, w, h, adults.filter(d => !d.dropped), s)) d.dropped = 'pair';
-    const kept = adults.filter(d => !d.dropped), detections = kept.concat(nymphs);
-    return { count: detections.length, adults: kept.length, nymphs: nymphs.length, detections, candidates, parameters: p, components: det.components.length, backlit: !!ring,
+    const kept = adults.filter(d => !d.dropped);
+    const pale = ring ? paleNymphs(prep.rgb, w, h, kept, nymphs, s) : [];
+    for (const d of pale) d.dropped = 'pale';
+    const nymphsKept = nymphs.filter(d => !d.dropped), detections = kept.concat(nymphsKept);
+    return { count: detections.length, adults: kept.length, nymphs: nymphsKept.length, nymphsDropped: pale, detections, candidates, parameters: p, components: det.components.length, backlit: !!ring,
       debrisFragments: debris.size, debrisRemoved: candidates.filter(d => d.dropped === 'straw').length,
       classifierRemoved: candidates.filter(d => d.dropped === 'classifier').length };
   }
 
-  /** Adult dots that are a second dot on an insect already dotted (PAIRS); the pairs with the least gap go first. */
-  function adultPairs(rgb, W, H, adults, s) {
-    const near = PAIRS.near * s, px = (x, y) => {
+  // Luma along the way from a to b: the brightest point (best of three parallel lines) minus the lighter end.
+  function pairLuma(rgb, W, H) {
+    const px = (x, y) => {
       const i = (Math.min(H - 1, Math.max(0, pyRound(y))) * W + Math.min(W - 1, Math.max(0, pyRound(x)))) * 3;
       return (rgb[i] + rgb[i + 1] + rgb[i + 2]) / 3;
     };
-    const spot = q => { let t = 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) t += px(q.x + dx, q.y + dy); return t / 9; };
-    const pairs = [];
-    for (let i = 0; i < adults.length; i++) for (let j = i + 1; j < adults.length; j++) {
-      const a = adults[i], b = adults[j], d = Math.hypot(b.x - a.x, b.y - a.y);
-      if (d >= near || d < 0.5) continue;
-      const m = Math.max(2, Math.floor(2 * d)), nx = -(b.y - a.y) / d, ny = (b.x - a.x) / d;
+    const spot = (q, r) => { let t = 0, n = 0; for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) { t += px(q.x + dx, q.y + dy); n++; } return t / n; };
+    const gap = (a, b) => {
+      const d = Math.hypot(b.x - a.x, b.y - a.y), m = Math.max(2, Math.floor(2 * d)), nx = -(b.y - a.y) / d, ny = (b.x - a.x) / d;
       let best = Infinity;
       for (const off of [-1.5, 0, 1.5]) {
         let top = -Infinity;
         for (let t = 0; t <= m; t++) top = Math.max(top, px(a.x + nx * off + (b.x - a.x) * t / m, a.y + ny * off + (b.y - a.y) * t / m));
         best = Math.min(best, top);
       }
-      const gap = best - Math.max(spot(a), spot(b));
-      if (gap <= PAIRS.gap) pairs.push({ a, b, gap });
+      return best - Math.max(spot(a, 1), spot(b, 1));
+    };
+    return { spot, gap };
+  }
+
+  /** Adult dots that are a second dot on an insect already dotted (PAIRS); the pairs with the least gap go first. */
+  function adultPairs(rgb, W, H, adults, s) {
+    const near = PAIRS.near * s, { gap } = pairLuma(rgb, W, H), pairs = [];
+    for (let i = 0; i < adults.length; i++) for (let j = i + 1; j < adults.length; j++) {
+      const a = adults[i], b = adults[j], d = Math.hypot(b.x - a.x, b.y - a.y);
+      if (d >= near || d < 0.5) continue;
+      const g = gap(a, b);
+      if (g <= PAIRS.gap) pairs.push({ a, b, gap: g });
     }
     pairs.sort((u, v) => u.gap - v.gap);
     const gone = new Set();
     for (const { a, b } of pairs) if (!gone.has(a) && !gone.has(b)) gone.add(b);
     return [...gone];
+  }
+
+  /** Nymph dots on a pale spot touching an adult (PAIRS.pale): the adult's wing. */
+  function paleNymphs(rgb, W, H, adults, nymphs, s) {
+    const near = PAIRS.near * s, { gap, spot } = pairLuma(rgb, W, H);
+    return nymphs.filter(q => spot(q, 2) >= PAIRS.pale && adults.some(a => {
+      const d = Math.hypot(a.x - q.x, a.y - q.y);
+      return d < near && d >= 0.5 && gap(a, q) <= PAIRS.pale_gap;
+    }));
   }
 
   /** photobooth_count.nymph_doubles: indices of adult dots sitting on a red-brown nymph that has its own dot. */

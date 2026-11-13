@@ -534,7 +534,7 @@ document.documentElement.lang = 'en';
     const struck = new Set(), restored = [], flipped = new Set();
     // a struck dot that a newer counter drops by itself stays dropped, rather than striking its neighbour
     // and a "one insect" answer whose pair the newer counter already merged strikes nothing more
-    const byCounter = dropped.filter(c => c[3] === 4);
+    const byCounter = dropped.filter(c => c[3] === 4 || c[3] === 5);
     const merged = (f.pairs || []).filter(r => r.struck && [r.a, r.b].some(q => nearest(byCounter, q[0], q[1], 1.5) >= 0)).map(r => r.struck);
     for (const [x, y] of f.removed) {
       if (nearest(dropped, x, y, 1.5) >= 0 || merged.some(q => Math.hypot(q[0] - x, q[1] - y) < 0.6)) continue;
@@ -610,7 +610,7 @@ document.documentElement.lang = 'en';
         gray: p.gray, core: p.core, auto_count: p.autoCount, count: p.count,
         removed: p.fix.removed, added: p.fix.added, retyped: p.fix.retyped, pairs: p.fix.pairs || [], added_without_candidate: p.fix.added.length - p.fix.restored.length,
         candidates: p.cands.map((c, i) => ({ x: +c[0].toFixed(1), y: +c[1].toFixed(1), p_insect: +c[2].toFixed(4),
-          dropped: ['', 'straw', 'classifier', 'nymph double', 'adult double'][c[3]] || null, kind: c[4] ? 'nymph' : 'adult', kind_by_hand: p.fix.kinds[i], label: p.fix.labels[i], features: p.feats[i] })) })) };
+          dropped: ['', 'straw', 'classifier', 'nymph double', 'adult double', 'pale nymph dot'][c[3]] || null, kind: c[4] ? 'nymph' : 'adult', kind_by_hand: p.fix.kinds[i], label: p.fix.labels[i], features: p.feats[i] })) })) };
   }
   $('fixExport').onclick = () => {
     const out = correctionsData();
@@ -670,9 +670,9 @@ document.documentElement.lang = 'en';
         if (gap <= PAIR.gap) out.push({ a: p, b: q, gap, d });
       }
     });
-    // the counter's own merges (dropped as a second dot on an adult), each with the nearest adult it sits next to
+    // the counter's own merges (a second dot on an adult, or a nymph dot on an adult's pale wing), each with the nearest adult
     const kept = ph.cands.filter(c => !c[3] && !c[4]);
-    for (const c of ph.cands.filter(c => c[3] === 4)) {
+    for (const c of ph.cands.filter(c => c[3] === 4 || c[3] === 5)) {
       let best = null, bd = near;
       for (const q of kept) { const d = Math.hypot(q[0] - c[0], q[1] - c[1]); if (d < bd) { bd = d; best = q; } }
       if (best) out.push({ a: best, b: c, gap: pairGap(ph, best, c), d: bd, auto: true });
@@ -712,7 +712,7 @@ document.documentElement.lang = 'en';
     if (!r.pairs.length) { $('pairMeta').textContent = 'No close pairs without a gap on this photo.'; $('pairAnswers').hidden = true; $('pairNote').textContent = ''; draw(); return; }
     $('pairAnswers').hidden = false;
     const pr = r.pairs[r.at], ans = pairAnswer(r.ph, pr), done = r.pairs.filter(p => answeredByHand(r.ph, p)).length;
-    const mixed = !!pr.a[4] !== !!pr.b[4];
+    const mixed = !pr.auto && !!pr.a[4] !== !!pr.b[4];
     $('pairOne').hidden = mixed; $('pairOneAdult').hidden = $('pairOneNymph').hidden = !mixed;
     for (const id of ['pairTwo', 'pairOne', 'pairOneAdult', 'pairOneNymph']) $(id).classList.remove('primary');
     if (ans) $(ans.one ? (mixed ? (ans.kind === 'nymph' ? 'pairOneNymph' : 'pairOneAdult') : 'pairOne') : 'pairTwo').classList.add('primary');
@@ -746,7 +746,7 @@ document.documentElement.lang = 'en';
     const rec = { a: [pr.a[0], pr.a[1], pr.a[4] ? 1 : 0], b: [pr.b[0], pr.b[1], pr.b[4] ? 1 : 0], gap: +pr.gap.toFixed(1), d: +pr.d.toFixed(1), one };
     if (pr.auto) { // the counter already dropped b: "two" adds it back
       rec.auto = true;
-      if (!one) { rec.restored = pr.b.slice(0, 2); if (!f.added.some(q => samePt(q, pr.b))) f.added.push(pr.b.slice(0, 2)); }
+      if (!one) { rec.restored = pr.b.slice(0, 2); if (!f.added.some(q => samePt(q, pr.b))) f.added.push(pr.b[4] ? [pr.b[0], pr.b[1], 1] : pr.b.slice(0, 2)); }
     } else if (one) {
       const strike = keep ? (!!pr.a[4] === (keep === 'nymph') ? pr.b : pr.a) : pr.b;
       rec.kind = keep || (pr.a[4] ? 'nymph' : 'adult'); rec.struck = strike.slice(0, 2);
@@ -776,7 +776,7 @@ document.documentElement.lang = 'en';
   };
   document.addEventListener('keydown', e => {
     if (!review || (e.target.closest && e.target.closest('input, textarea, select')) || e.metaKey || e.ctrlKey || e.altKey) return;
-    const pr = review.pairs[review.at], mixed = !!pr && !!pr.a[4] !== !!pr.b[4];
+    const pr = review.pairs[review.at], mixed = !!pr && !pr.auto && !!pr.a[4] !== !!pr.b[4];
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     const act = { '1': () => !mixed && answerPair(true), '2': () => answerPair(false), a: () => mixed && answerPair(true, 'adult'),
       n: () => mixed && answerPair(true, 'nymph'), ArrowLeft: () => $('pairPrev').click(), ArrowRight: () => $('pairNext').click(), Escape: () => stopReview() }[key];
