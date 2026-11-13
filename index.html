@@ -594,15 +594,20 @@ document.documentElement.lang = 'en';
     draw(); renderCount(); renderList(); renderFix(); autoSave(ph);
   };
   // One JSON file: for every corrected photo, each candidate's classifier inputs and its label. No pixels.
-  $('fixExport').onclick = () => {
-    const done = photos.filter(p => p.cands && hasFix(p.fix));
-    if (!done.length) return;
-    const out = { format: 'orius-corrections-1', exported: new Date().toISOString(), features: done[0].featureNames,
+  // Also written as orius_corrections_<browser id>.json by auto-save, so the corrections reach the training folder without an export.
+  function correctionsData() {
+    const done = photos.filter(p => p.cands && p.fix.kinds && hasFix(p.fix));
+    if (!done.length) return null;
+    return { format: 'orius-corrections-1', exported: new Date().toISOString(), features: done[0].featureNames,
       photos: done.map(p => ({ name: p.name, width: p.origW, height: p.origH, analysed_width: p.prepW, dish: p.dish,
         gray: p.gray, core: p.core, auto_count: p.autoCount, count: p.count,
         removed: p.fix.removed, added: p.fix.added, retyped: p.fix.retyped, pairs: p.fix.pairs || [], added_without_candidate: p.fix.added.length - p.fix.restored.length,
         candidates: p.cands.map((c, i) => ({ x: +c[0].toFixed(1), y: +c[1].toFixed(1), p_insect: +c[2].toFixed(4),
           dropped: ['', 'straw', 'classifier', 'nymph double'][c[3]] || null, kind: c[4] ? 'nymph' : 'adult', kind_by_hand: p.fix.kinds[i], label: p.fix.labels[i], features: p.feats[i] })) })) };
+  }
+  $('fixExport').onclick = () => {
+    const out = correctionsData();
+    if (!out) return;
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
     offer(`orius_corrections_${stamp}.json`, new Blob([JSON.stringify(out)], { type: 'application/json' }));
   };
@@ -1076,7 +1081,7 @@ document.documentElement.lang = 'en';
     if (state !== 'granted') return false;
     folder = handle; pendingFolder = null;
     $('autoBtn').textContent = 'Stop auto-save';
-    $('autoNote').textContent = `Auto-saving every photo to the folder “${handle.name}”: original, marked photo and orius_counts.csv.`;
+    $('autoNote').textContent = `Auto-saving every photo to the folder “${handle.name}”: original, marked photo, orius_counts.csv and your corrections (orius_corrections_${browserId()}.json).`;
     for (const ph of photos) if (ph.status === 'done') await autoSave(ph);
     return true;
   }
@@ -1086,12 +1091,23 @@ document.documentElement.lang = 'en';
     const w = await fh.createWritable(); await w.write(blob); await w.close();
   }
 
+  // Each browser writes its own corrections file, so teammates saving into one shared (synced) folder never
+  // overwrite each other's corrections.
+  function browserId() {
+    let id = null;
+    try { id = localStorage.getItem('oriusDevice'); } catch {}
+    if (!id) { id = Math.random().toString(36).slice(2, 8); try { localStorage.setItem('oriusDevice', id); } catch {} }
+    return id;
+  }
+
   async function autoSave(ph) {
     if (!folder || ph.example || ph.status !== 'done') return;
     try {
       await writeFile(/\.(jpe?g|png|webp)$/i.test(ph.name) ? ph.name : ph.name + '.jpg', ph.blob);
       await writeFile(ph.name.replace(/\.[^.]+$/, '') + '_detections.jpg', await markedBlob(ph));
       await writeFile('orius_counts.csv', csvBlob());
+      const fixes = correctionsData();
+      if (fixes) await writeFile(`orius_corrections_${browserId()}.json`, new Blob([JSON.stringify(fixes)], { type: 'application/json' }));
     } catch (err) { $('autoNote').textContent = 'Auto-save failed: ' + err.message; }
   }
 
