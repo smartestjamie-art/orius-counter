@@ -1103,6 +1103,7 @@ document.documentElement.lang = 'en';
     $('autoBtn').textContent = 'Stop auto-save';
     $('autoNote').textContent = `Auto-saving every photo to the folder “${handle.name}”: original, marked photo, orius_counts.csv and your corrections (orius_corrections_${browserId()}.json).`;
     for (const ph of photos) if (ph.status === 'done') await autoSave(ph);
+    saveCorrections().catch(() => {});
     return true;
   }
 
@@ -1120,14 +1121,19 @@ document.documentElement.lang = 'en';
     return id;
   }
 
+  // Also right after the page opens, so corrections made with an older page reach the folder on the first visit.
+  async function saveCorrections() {
+    const fixes = folder && correctionsData();
+    if (fixes) await writeFile(`orius_corrections_${browserId()}.json`, new Blob([JSON.stringify(fixes)], { type: 'application/json' }));
+  }
+
   async function autoSave(ph) {
     if (!folder || ph.example || ph.status !== 'done') return;
     try {
       await writeFile(/\.(jpe?g|png|webp)$/i.test(ph.name) ? ph.name : ph.name + '.jpg', ph.blob);
       await writeFile(ph.name.replace(/\.[^.]+$/, '') + '_detections.jpg', await markedBlob(ph));
       await writeFile('orius_counts.csv', csvBlob());
-      const fixes = correctionsData();
-      if (fixes) await writeFile(`orius_corrections_${browserId()}.json`, new Blob([JSON.stringify(fixes)], { type: 'application/json' }));
+      await saveCorrections();
     } catch (err) { $('autoNote').textContent = 'Auto-save failed: ' + err.message; }
   }
 
@@ -1634,7 +1640,7 @@ document.documentElement.lang = 'en';
   renderList(); renderCount(); renderFix();
   // Photos from earlier visits come back first; the example shows only when there are none.
   store('photos', 'readonly', s => s.getAll()).then(saved => {
-    if (saved && saved.length) { saved.sort((a, b) => a.added - b.added).forEach(r => addPhoto(r.blob, r.name, false, r)); return; }
+    if (saved && saved.length) { saved.sort((a, b) => a.added - b.added).forEach(r => addPhoto(r.blob, r.name, false, r)); saveCorrections().catch(() => {}); return; }
     return fetch('sample.jpg').then(r => r.blob()).then(b => addPhoto(b, 'Arducam dish, 28 Oct', true));
   }).catch(() => { $('empty').hidden = false; renderCount(); });
 })();
