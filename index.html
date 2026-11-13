@@ -532,7 +532,14 @@ document.documentElement.lang = 'en';
     if (!ph.cands) return;
     const R = markRadius(ph), kept = ph.cands.filter(c => !c[3]), dropped = ph.cands.filter(c => c[3]);
     const struck = new Set(), restored = [], flipped = new Set();
-    for (const [x, y] of f.removed) { const i = nearest(kept, x, y, R); if (i >= 0) struck.add(kept[i]); }
+    // a struck dot that a newer counter drops by itself stays dropped, rather than striking its neighbour
+    // and a "one insect" answer whose pair the newer counter already merged strikes nothing more
+    const byCounter = dropped.filter(c => c[3] === 4);
+    const merged = (f.pairs || []).filter(r => r.struck && [r.a, r.b].some(q => nearest(byCounter, q[0], q[1], 1.5) >= 0)).map(r => r.struck);
+    for (const [x, y] of f.removed) {
+      if (nearest(dropped, x, y, 1.5) >= 0 || merged.some(q => Math.hypot(q[0] - x, q[1] - y) < 0.6)) continue;
+      const i = nearest(kept, x, y, R); if (i >= 0) struck.add(kept[i]);
+    }
     for (const [x, y] of f.added) { const i = nearest(dropped, x, y, R); if (i >= 0) restored.push(dropped[i]); }
     for (const [x, y] of f.retyped) { const i = nearest(kept, x, y, R); if (i >= 0) flipped.add(kept[i]); }
     // retyped: counted dots switched by hand between adult and nymph (a copy with the kind flipped)
@@ -603,7 +610,7 @@ document.documentElement.lang = 'en';
         gray: p.gray, core: p.core, auto_count: p.autoCount, count: p.count,
         removed: p.fix.removed, added: p.fix.added, retyped: p.fix.retyped, pairs: p.fix.pairs || [], added_without_candidate: p.fix.added.length - p.fix.restored.length,
         candidates: p.cands.map((c, i) => ({ x: +c[0].toFixed(1), y: +c[1].toFixed(1), p_insect: +c[2].toFixed(4),
-          dropped: ['', 'straw', 'classifier', 'nymph double'][c[3]] || null, kind: c[4] ? 'nymph' : 'adult', kind_by_hand: p.fix.kinds[i], label: p.fix.labels[i], features: p.feats[i] })) })) };
+          dropped: ['', 'straw', 'classifier', 'nymph double', 'adult double'][c[3]] || null, kind: c[4] ? 'nymph' : 'adult', kind_by_hand: p.fix.kinds[i], label: p.fix.labels[i], features: p.feats[i] })) })) };
   }
   $('fixExport').onclick = () => {
     const out = correctionsData();
@@ -642,8 +649,10 @@ document.documentElement.lang = 'en';
 
   const samePt = (p, q) => Math.abs(p[0] - q[0]) < 0.6 && Math.abs(p[1] - q[1]) < 0.6;
   function pairAnswer(ph, pr) {
-    return (ph.fix.pairs || []).find(r => (samePt(r.a, pr.a) && samePt(r.b, pr.b)) || (samePt(r.a, pr.b) && samePt(r.b, pr.a)));
+    return (ph.fix.pairs || []).find(r => (samePt(r.a, pr.a) && samePt(r.b, pr.b)) || (samePt(r.a, pr.b) && samePt(r.b, pr.a)))
+      || (pr.auto ? { one: true, byCounter: true } : null);
   }
+  const answeredByHand = (ph, pr) => { const a = pairAnswer(ph, pr); return a && !a.byCounter; };
 
   // Counted dots plus those struck by a "one insect" answer, so answered pairs stay in the list.
   function findPairs(ph) {
@@ -661,6 +670,13 @@ document.documentElement.lang = 'en';
         if (gap <= PAIR.gap) out.push({ a: p, b: q, gap, d });
       }
     });
+    // the counter's own merges (dropped as a second dot on an adult), each with the nearest adult it sits next to
+    const kept = ph.cands.filter(c => !c[3] && !c[4]);
+    for (const c of ph.cands.filter(c => c[3] === 4)) {
+      let best = null, bd = near;
+      for (const q of kept) { const d = Math.hypot(q[0] - c[0], q[1] - c[1]); if (d < bd) { bd = d; best = q; } }
+      if (best) out.push({ a: best, b: c, gap: pairGap(ph, best, c), d: bd, auto: true });
+    }
     // in bands from top to bottom, left to right within a band, so Next moves across the dish in order
     const band = pr => Math.round((pr.a[1] + pr.b[1]) / 80);
     return out.sort((u, v) => band(u) - band(v) || (u.a[0] + u.b[0]) - (v.a[0] + v.b[0]));
@@ -674,7 +690,7 @@ document.documentElement.lang = 'en';
     setTimeout(() => {
       const pairs = findPairs(ph);
       review = { ph, pairs, at: 0 };
-      const open = pairs.findIndex(pr => !pairAnswer(ph, pr));
+      const open = pairs.findIndex(pr => !answeredByHand(ph, pr));
       review.at = open >= 0 ? open : 0;
       if (!fixing) { fixing = true; $('showMarks').checked = true; renderFix(); }
       showPair();
@@ -695,12 +711,12 @@ document.documentElement.lang = 'en';
     $('pairPanel').hidden = false; $('pairBtn').setAttribute('aria-pressed', 'true'); $('pairBtn').textContent = 'Stop reviewing';
     if (!r.pairs.length) { $('pairMeta').textContent = 'No close pairs without a gap on this photo.'; $('pairAnswers').hidden = true; $('pairNote').textContent = ''; draw(); return; }
     $('pairAnswers').hidden = false;
-    const pr = r.pairs[r.at], ans = pairAnswer(r.ph, pr), done = r.pairs.filter(p => pairAnswer(r.ph, p)).length;
+    const pr = r.pairs[r.at], ans = pairAnswer(r.ph, pr), done = r.pairs.filter(p => answeredByHand(r.ph, p)).length;
     const mixed = !!pr.a[4] !== !!pr.b[4];
     $('pairOne').hidden = mixed; $('pairOneAdult').hidden = $('pairOneNymph').hidden = !mixed;
     for (const id of ['pairTwo', 'pairOne', 'pairOneAdult', 'pairOneNymph']) $(id).classList.remove('primary');
     if (ans) $(ans.one ? (mixed ? (ans.kind === 'nymph' ? 'pairOneNymph' : 'pairOneAdult') : 'pairOne') : 'pairTwo').classList.add('primary');
-    $('pairMeta').textContent = `Pair ${r.at + 1} of ${r.pairs.length} · ${done} answered` + (ans ? ` · this one: ${ans.one ? 'one insect' : 'two insects'}` : '');
+    $('pairMeta').textContent = `Pair ${r.at + 1} of ${r.pairs.length} · ${done} answered` + (ans ? ` · this one: ${ans.one ? 'one insect' : 'two insects'}${ans.byCounter ? ' (merged by the counter; confirm or say two)' : ''}` : '');
     $('pairNote').textContent = `Yellow ring: the pair to answer; thin rings: the others. Keys: ${mixed ? 'A one adult, N one nymph' : '1 one insect'}, 2 two insects, ← → move, Esc stop.`;
     const s = r.ph.origW / r.ph.prepW; // zoom onto the pair
     zoom = { s: Math.max(zoom ? zoom.s : 0, 10), x: (pr.a[0] + pr.b[0]) / 2 * s, y: (pr.a[1] + pr.b[1]) / 2 * s };
@@ -722,12 +738,16 @@ document.documentElement.lang = 'en';
   function answerPair(one, keep) {
     const r = review; if (!r || !r.pairs.length) return;
     const ph = r.ph, f = ph.fix, pr = r.pairs[r.at], old = pairAnswer(ph, pr);
-    if (old) { // replace the earlier answer, and its strike
+    if (old && !old.byCounter) { // replace the earlier answer, and its strike or restore
       if (old.struck) { const i = f.removed.findIndex(q => samePt(q, old.struck)); if (i >= 0) f.removed.splice(i, 1); }
+      if (old.restored) { const i = f.added.findIndex(q => samePt(q, old.restored)); if (i >= 0) f.added.splice(i, 1); }
       f.pairs.splice(f.pairs.indexOf(old), 1);
     }
     const rec = { a: [pr.a[0], pr.a[1], pr.a[4] ? 1 : 0], b: [pr.b[0], pr.b[1], pr.b[4] ? 1 : 0], gap: +pr.gap.toFixed(1), d: +pr.d.toFixed(1), one };
-    if (one) {
+    if (pr.auto) { // the counter already dropped b: "two" adds it back
+      rec.auto = true;
+      if (!one) { rec.restored = pr.b.slice(0, 2); if (!f.added.some(q => samePt(q, pr.b))) f.added.push(pr.b.slice(0, 2)); }
+    } else if (one) {
       const strike = keep ? (!!pr.a[4] === (keep === 'nymph') ? pr.b : pr.a) : pr.b;
       rec.kind = keep || (pr.a[4] ? 'nymph' : 'adult'); rec.struck = strike.slice(0, 2);
       if (!f.removed.some(q => samePt(q, strike))) f.removed.push(strike.slice(0, 2));
@@ -735,10 +755,10 @@ document.documentElement.lang = 'en';
     f.pairs.push(rec);
     applyFix(ph); savePhoto(ph); renderCount(); renderList(); renderFix();
     clearTimeout(fixAt.t); fixAt.t = setTimeout(() => autoSave(ph), 1500);
-    const next = r.pairs.findIndex((p, i) => i > r.at && !pairAnswer(ph, p));
+    const next = r.pairs.findIndex((p, i) => i > r.at && !answeredByHand(ph, p));
     if (next >= 0) r.at = next;
     showPair();
-    if (r.pairs.every(p => pairAnswer(ph, p))) $('pairNote').textContent = `All ${r.pairs.length} close pairs on this photo are answered.`;
+    if (r.pairs.every(p => answeredByHand(ph, p))) $('pairNote').textContent = `All ${r.pairs.length} close pairs on this photo are answered.`;
   }
 
   $('pairBtn').onclick = () => review ? stopReview() : startReview();
@@ -751,7 +771,7 @@ document.documentElement.lang = 'en';
   $('pairNextOpen').onclick = () => {
     if (!review || !review.pairs.length) return;
     const n = review.pairs.length;
-    for (let k = 1; k <= n; k++) { const i = (review.at + k) % n; if (!pairAnswer(review.ph, review.pairs[i])) { review.at = i; showPair(); return; } }
+    for (let k = 1; k <= n; k++) { const i = (review.at + k) % n; if (!answeredByHand(review.ph, review.pairs[i])) { review.at = i; showPair(); return; } }
     $('pairNote').textContent = 'Every close pair on this photo is answered.';
   };
   document.addEventListener('keydown', e => {
