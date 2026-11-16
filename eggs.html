@@ -132,6 +132,10 @@
   .stitch .head b { font: 600 15px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--accent); }
   .stitch .head .meta { margin: 0; flex: 1 1 200px; }
   .stitch canvas { display: block; width: 100%; border-radius: 8px; background: var(--stage); }
+  .joinAdj { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 8px; font-size: 13px; }
+  .joinAdj label { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .joinAdj output { font: 600 12px var(--font-mono); color: var(--ink); min-width: 44px; text-align: right; }
+  .joinAdj input[type=range] { width: 160px; accent-color: var(--accent); }
   .status { font-size: 13px; color: var(--muted); }
   .pill { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px; font-weight: 600;
     background: var(--accent-soft); color: var(--accent); }
@@ -310,7 +314,9 @@
     <div id="stitchBox" hidden>
       <h2 id="stitchTitle">Stitched pod</h2>
       <p class="note" style="margin-top:0">Each side's shots joined where they overlap: every part of the pod appears once, so
-        every egg is counted once. Updates as shots come in.</p>
+        every egg is counted once. If a join shows a step or a repeated piece, drag its Overlap (and Up / down) until the
+        pod runs on smoothly and press Save for these marks: the rail marks are fixed, so it holds for every pod, and
+        later pods are matched close to it.</p>
       <div id="stitchSides"></div>
     </div>
     <h2>Pods</h2>
@@ -349,7 +355,7 @@ document.documentElement.lang = 'en';
   } catch {}
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-16b'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-16c'; // bump with every change to a worker, so a browser never keeps an old copy
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
   worker.onmessage = e => { const p = pending.get(e.data.seq); if (p) { pending.delete(e.data.seq); e.data.error ? p.reject(new Error(e.data.error)) : p.resolve(e.data); } };
@@ -489,18 +495,21 @@ document.documentElement.lang = 'en';
     if (!settings.autoOverlap) return;
     for (const a of photos) {
       const b = neighbour(a, 1); if (!b || !a.thumb || !b.thumb) continue;
-      const key = a.key + '|' + b.key; if (matches.has(key)) continue;
-      if (a.thumb.w !== b.thumb.w || a.thumb.h !== b.thumb.h) { matches.set(key, { ok: false, why: 'different photo sizes' }); continue; }
+      const key = a.key + '|' + b.key, known = knownShift(a), near = known ? +known.frac.toFixed(4) : null;
+      const had = matches.get(key); if (had && (had === 'pending' || had.near === near)) continue;
+      if (a.thumb.w !== b.thumb.w || a.thumb.h !== b.thumb.h) { matches.set(key, { ok: false, why: 'different photo sizes', near }); continue; }
       matches.set(key, 'pending');
-      call({ type: 'match', a: a.thumb.g.slice().buffer, b: b.thumb.g.slice().buffer, ma: a.thumb.m.slice().buffer, mb: b.thumb.m.slice().buffer, width: a.thumb.w, height: a.thumb.h })
+      // With a known shift for this pair of marks (set by hand, or remembered) the search stays within 6 % of it: the
+      // pod's surface looks alike at several shifts, so a free search can pick the wrong one.
+      call({ type: 'match', a: a.thumb.g.slice().buffer, b: b.thumb.g.slice().buffer, ma: a.thumb.m.slice().buffer, mb: b.thumb.m.slice().buffer, width: a.thumb.w, height: a.thumb.h, near: near ?? undefined })
         .then(r => {
           const k = a.origW / a.thumb.w;
-          // a clear peak: decent correlation, well above the best other shift
-          const ok = r.score > 0.25 && (r.coarse ?? r.score) - Math.max(0, r.second) > 0.08; // clear peak in the search
-          matches.set(key, { s: r.s * k, dy: r.dy * k, score: r.score, second: r.second, ok });
+          // a clear peak: decent correlation, well above the best other shift in the search
+          const ok = r.score > (near != null ? 0.2 : 0.25) && (r.coarse ?? r.score) - Math.max(0, r.second) > 0.08;
+          matches.set(key, { s: r.s * k, dy: r.dy * k, score: r.score, second: r.second, ok, near });
           if (ok && !a.example) learn(a, key, r.s / a.thumb.w);
         })
-        .catch(err => matches.set(key, { ok: false, why: err.message }))
+        .catch(err => matches.set(key, { ok: false, why: err.message, near }))
         .finally(() => { render(); draw(); });
     }
   }
@@ -514,6 +523,10 @@ document.documentElement.lang = 'en';
     const keys = Object.keys(m); while (keys.length > 20) delete m[keys.shift()];
     saveSettings();
   }
+  // A pair's shift set by hand (sliders under the stitched pod): s and dy as fractions of the width and height.
+  const pairOf = a => `${posOf(a)}-${+posOf(a) + 1}`;
+  const calibOf = a => (settings.calib || {})[pairOf(a)] || null;
+  function knownShift(a) { const c = calibOf(a); if (c) return { frac: c.s, src: 'set' }; const l = learnedShift(a); return l ? { frac: l.frac, src: 'learned' } : null; }
   function learnedShift(a) {
     const m = settings.learned && settings.learned[`${posOf(a)}-${+posOf(a) + 1}`];
     const v = m ? Object.values(m).sort((x, y) => x - y) : [];
@@ -523,9 +536,11 @@ document.documentElement.lang = 'en';
   function shiftFor(a, b) {
     if (!a || !b) return null;
     const m = matchOf(a, b);
-    if (m && m.ok) return { s: m.s, src: 'match' };
+    if (m && m.ok) return { s: m.s, dy: m.dy, src: 'match' };
+    const c = calibOf(a);
+    if (c) return { s: c.s * a.origW, dy: c.dy * a.origH, src: 'set' };
     const l = learnedShift(a);
-    return l ? { s: l.frac * a.origW, src: 'learned' } : null;
+    return l ? { s: l.frac * a.origW, dy: 0, src: 'learned' } : null;
   }
   const matchOf = (a, b) => { const m = a && b && matches.get(a.key + '|' + b.key); return m && m !== 'pending' ? m : null; };
 
@@ -799,8 +814,8 @@ document.documentElement.lang = 'en';
     return shots.map((ph, i) => {
       const [x0, x1] = areaOf(ph);
       if (i) {
-        const a = shots[i - 1], [, ax1] = areaOf(a), m = matchOf(a, ph);
-        ox += ax1 - x0; if (m && m.ok && +posOf(ph) === +posOf(a) + 1) oy += m.dy;
+        const a = shots[i - 1], [, ax1] = areaOf(a), sh = +posOf(ph) === +posOf(a) + 1 ? shiftFor(a, ph) : null;
+        ox += ax1 - x0; if (sh) oy += sh.dy || 0;
       }
       return { ph, x0, x1, ox, oy };
     });
@@ -831,7 +846,7 @@ document.documentElement.lang = 'en';
   function renderStitch() {
     const pod = selected && !selected.example ? selected.pod : podId;
     const sides = ['A', 'B'].map(side => ({ side, shots: sideShots(pod, side) })).filter(x => x.shots.length >= 2);
-    const sig = pod + '|' + $('showMarks').checked + '|' + sides.map(x => x.shots.map(p => [p.key, areaOf(p).map(Math.round), countOf(p)].join(':')).join(',')).join(';');
+    const sig = pod + '|' + JSON.stringify(settings.calib || {}) + '|' + $('showMarks').checked + '|' + sides.map(x => x.shots.map(p => [p.key, areaOf(p).map(Math.round), countOf(p)].join(':')).join(',')).join(';');
     if (sig === stitchSig) return;
     stitchSig = sig;
     $('stitchBox').hidden = !sides.length;
@@ -840,7 +855,7 @@ document.documentElement.lang = 'en';
     $('stitchTitle').textContent = `Stitched pod · ${pod}`;
     for (const { side, shots } of sides) {
       const parts = stitchLayout(shots), total = shots.reduce((t, p) => t + (countOf(p) || 0), 0);
-      const joins = shots.slice(1).map((b, i) => { const sh = shiftFor(shots[i], b); return sh ? (sh.src === 'match' ? 'matched' : 'remembered') : 'mark edges'; });
+      const joins = shots.slice(1).map((b, i) => { const sh = shiftFor(shots[i], b); return sh ? { match: 'matched', set: 'set by hand', learned: 'remembered' }[sh.src] : 'mark edges'; });
       const wrap = document.createElement('div'); wrap.className = 'stitch';
       const head = document.createElement('div'); head.className = 'head';
       head.innerHTML = `<span>Side ${side}</span><b>${total} eggs</b><span class="meta"></span>`;
@@ -854,7 +869,7 @@ document.documentElement.lang = 'en';
       head.append(save);
       const width = Math.max(320, box.clientWidth || 800) * (window.devicePixelRatio || 1);
       const fullW = Math.max(...parts.map(p => p.ox + p.x1)) - Math.min(...parts.map(p => p.ox + p.x0));
-      const view0 = stitchCanvas(parts, Math.min(1, width / fullW));
+      const view0 = stitchCanvas(parts, Math.min(1, width / fullW)); view0.dataset.scale = Math.min(1, width / fullW);
       view0.style.cursor = 'zoom-in'; view0.title = 'Open full size in a new tab';
       view0.onclick = async () => { // full resolution in a new tab, where it can be zoomed freely
         const tab = window.open('', '_blank');
@@ -863,6 +878,41 @@ document.documentElement.lang = 'en';
         if (tab) tab.location.href = URL.createObjectURL(blob);
       };
       wrap.append(head, view0);
+      // Adjust a join by hand: drag until the pod runs on without a step or a repeat, then save it for these marks
+      // (the marks are fixed, so it holds for every pod).
+      shots.slice(1).forEach((b, i) => {
+        const a = shots[i]; if (+posOf(b) !== +posOf(a) + 1) return;
+        const sh = shiftFor(a, b) || { s: a.origW * (1 - 0.3), dy: 0 };
+        const row = document.createElement('div'); row.className = 'joinAdj';
+        row.innerHTML = `<b>${a.shot} | ${b.shot}</b><label>Overlap <output></output><input type="range" min="2" max="95" step="0.2"></label>` +
+          `<label>Up / down <output></output><input type="range" min="-12" max="12" step="0.1"></label>`;
+        const [ov, ud] = row.querySelectorAll('input'), [ovOut, udOut] = row.querySelectorAll('output');
+        ov.value = (100 * (1 - sh.s / a.origW)).toFixed(1); ud.value = (100 * (sh.dy || 0) / a.origH).toFixed(1);
+        const show = () => { ovOut.textContent = `${(+ov.value).toFixed(1)}%`; udOut.textContent = `${(+ud.value).toFixed(1)}%`; };
+        show();
+        const save = document.createElement('button'); save.className = 'small'; save.textContent = 'Save for these marks';
+        const clear = document.createElement('button'); clear.className = 'small'; clear.textContent = 'Back to automatic';
+        clear.hidden = !calibOf(a);
+        // live preview: this join set from the sliders, the others as they are
+        const preview = () => {
+          show();
+          const keep = settings.calib, pair = pairOf(a), key = a.key + '|' + b.key, m = matches.get(key);
+          settings.calib = { ...(keep || {}), [pair]: { s: 1 - ov.value / 100, dy: ud.value / 100 } };
+          if (m && m !== 'pending') matches.set(key, { ...m, ok: false });
+          const fresh = stitchCanvas(stitchLayout(sideShots(pod, side)), +wrap.querySelector('canvas').dataset.scale);
+          fresh.dataset.scale = wrap.querySelector('canvas').dataset.scale; fresh.style.cssText = view0.style.cssText; fresh.onclick = view0.onclick;
+          wrap.querySelector('canvas').replaceWith(fresh);
+          settings.calib = keep; if (m && m !== 'pending') matches.set(key, m);
+        };
+        ov.oninput = ud.oninput = preview;
+        save.onclick = () => {
+          settings.calib = { ...(settings.calib || {}), [pairOf(a)]: { s: 1 - ov.value / 100, dy: ud.value / 100 } };
+          saveSettings(); matches.delete(a.key + '|' + b.key); stitchSig = ''; render(); draw();
+        };
+        clear.onclick = () => { const c = { ...(settings.calib || {}) }; delete c[pairOf(a)]; settings.calib = c; saveSettings(); matches.delete(a.key + '|' + b.key); stitchSig = ''; render(); draw(); };
+        row.append(save, clear);
+        wrap.append(row);
+      });
       box.append(wrap);
     }
   }
@@ -892,9 +942,10 @@ document.documentElement.lang = 'en';
       const m = step > 0 ? matches.get(ph.key + '|' + q.key) : matches.get(q.key + '|' + ph.key);
       if (!m || m === 'pending') parts.push(`${q.shot}: matching…`);
       else if (!m.ok) {
-        const l = learnedShift(step > 0 ? ph : q);
+        const first = step > 0 ? ph : q, c = calibOf(first), l = learnedShift(first);
         parts.push(`${q.shot}: no clear match${m.why ? ` (${m.why})` : m.score != null ? ` (score ${m.score.toFixed(2)})` : ''}, ` +
-          (l ? `using the overlap remembered from ${l.n} earlier match${l.n > 1 ? 'es' : ''} (${Math.round((1 - Math.abs(l.frac)) * 100)}%)` : 'using the mark setting'));
+          (c ? `using the overlap set by hand (${Math.round((1 - c.s) * 100)}%)`
+            : l ? `using the overlap remembered from ${l.n} earlier match${l.n > 1 ? 'es' : ''} (${Math.round((1 - Math.abs(l.frac)) * 100)}%)` : 'using the mark setting'));
       }
       else parts.push(`${q.shot}: overlap ${Math.round((1 - Math.abs(m.s) / ph.origW) * 100)}% of the width, match ${m.score.toFixed(2)}`);
     }

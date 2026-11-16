@@ -91,7 +91,7 @@ function count({ rgb, width: W, height: H, de, contrast, edge }) {
 // score: normalised correlation at the best shift; second: best score at a clearly different shift.
 // Only the pod is matched (ma, mb: green-pod masks): the camera, rail, background and lighting stay put while the
 // tray slides, so they would pull the match towards no shift at all.
-function match({ a, b, ma, mb, width: W, height: H }) {
+function match({ a, b, ma, mb, width: W, height: H, near }) {
   const A = texture(new Float32Array(a), W, H), B = texture(new Float32Array(b), W, H);
   // half-size search: at quarter size the pod's fine surface texture is gone and the match lands on the wrong shift
   const f = +(self.MATCH_F || 2), w = Math.floor(W / f), h = Math.floor(H / f);
@@ -108,9 +108,11 @@ function match({ a, b, ma, mb, width: W, height: H }) {
   const podN = v => v ? v.reduce((t, x) => t + x, 0) : 0;
   const needFull = MA ? Math.max(50, 0.125 * Math.min(podN(MA), podN(MB))) : 0, needSmall = MAs ? Math.max(30, 0.125 * Math.min(podN(MAs), podN(MBs))) : 0;
   const ncc = (P, Q, ww, hh, s, dy) => MAs ? nccMasked(P, Q, ww === W ? MA : MAs, ww === W ? MB : MBs, ww, hh, s, dy, ww === W ? needFull : needSmall) : nccPlain(P, Q, ww, hh, s, dy);
-  const minOv = Math.round(w * 0.06), maxDy = Math.round(h * 0.05); // the tray slides along the rail: little vertical shift
+  const minOv = Math.round(w * 0.06), maxDy = Math.round(h * 0.08); // the tray slides along the rail, but A1-A2 on the real rig moved 6 % down
+  // near: the shift this pair of rail marks is known to have (fraction of the width): search only close to it
+  const sLo = near != null ? Math.round((near - 0.06) * w) : -(w - minOv), sHi = near != null ? Math.round((near + 0.06) * w) : w - minOv;
   let best = { score: -2 }, scores = [];
-  for (let s = -(w - minOv); s <= w - minOv; s++) {
+  for (let s = Math.max(sLo, -(w - minOv)); s <= Math.min(sHi, w - minOv); s++) {
     let top = -2, topDy = 0;
     for (let dy = -maxDy; dy <= maxDy; dy++) { const c = ncc(As, Bs, w, h, s, dy); if (c > top) { top = c; topDy = dy; } }
     scores.push([s, top]);
@@ -125,6 +127,7 @@ function match({ a, b, ma, mb, width: W, height: H }) {
       if (Math.abs(s) > W - minOv * f) continue;
       const c = ncc(A, B, W, H, s, dy); if (c > fine.score) fine = { score: c, s, dy };
     }
+  if (self.MATCH_DEBUG) self.MATCH_DEBUG.scores = scores;
   return { s: fine.s, dy: fine.dy, score: fine.score, second, coarse: best.score, masked: !!MAs };
 }
 
