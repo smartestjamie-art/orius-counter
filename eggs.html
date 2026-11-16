@@ -210,6 +210,21 @@
           <button id="stopCamBtn">Stop camera</button>
         </div>
         <div class="meta" id="streamMeta"></div>
+        <div class="meta" id="focusMeta"></div>
+        <div class="slider" id="focusRow" hidden>
+          <label for="focus">Focus</label><output id="focusOut"></output>
+          <input type="range" id="focus">
+        </div>
+        <div class="row" id="focusBtns" hidden>
+          <button class="small" id="focusSweepBtn">Find sharpest focus</button>
+          <button class="small" id="focusAutoBtn">Autofocus</button>
+        </div>
+        <div id="stackRow" hidden>
+          <label class="check"><input type="checkbox" id="stackToggle"> Focus stack: shoot across the sharp range, align, merge</label>
+          <div class="row"><button class="small" id="stackRangeBtn">Find stack range</button></div>
+        </div>
+        <div class="row" id="focusConnect" hidden><button class="small" id="focusConnectBtn">Connect focus helper</button><a class="small" href="https://smartestjamie-art.github.io/orius-counter/orius_focus_helper.zip" download>Download focus helper for Mac</a></div>
+        <p class="note" id="focusNote"></p>
       </div>
 
       <div class="panel">
@@ -941,6 +956,7 @@ document.documentElement.lang = 'en';
     sel.value = stream.getVideoTracks()[0].getSettings().deviceId || '';
     $('streamMeta').textContent = `${video.videoWidth} × ${video.videoHeight}`;
     renderCaptureBtn(); renderFix(); draw();
+    setupFocus(stream.getVideoTracks()[0]);
   }
   function stopCamera() {
     if (!stream) return;
@@ -949,17 +965,216 @@ document.documentElement.lang = 'en';
     clearInterval(magTimer); magTimer = null; magAt = null; magPin = null; liveZoom = null; applyLiveZoom();
     renderFix(); draw();
   }
+  // ---------- focus: the Mac focus helper (orius_focus, as on the Orius page), else the browser's own control ----------
+  let browserCam = null, focusConnected = false;
+  const FOCUS_UNITS = 1023, isMac = /Mac/i.test(navigator.userAgentData && navigator.userAgentData.platform || navigator.platform || '');
+  async function helper(query) {
+    if (browserCam) { // Chrome / Edge on Windows: the browser sets the focus; its range is mapped onto the helper's 0-1023
+      const { track, caps } = browserCam, fd = caps.focusDistance, p = new URLSearchParams(query || '');
+      try {
+        if (p.has('value')) {
+          let d = fd.min + (fd.max - fd.min) * Math.max(0, Math.min(FOCUS_UNITS, +p.get('value'))) / FOCUS_UNITS;
+          if (fd.step) d = fd.min + Math.round((d - fd.min) / fd.step) * fd.step;
+          await track.applyConstraints({ advanced: [{ focusMode: 'manual', focusDistance: Math.min(fd.max, d) }] });
+        } else if (p.get('auto') === '1') await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+      } catch {}
+      const st = track.getSettings(), d = st.focusDistance != null ? st.focusDistance : fd.min;
+      return { min: 0, max: FOCUS_UNITS, value: Math.round(FOCUS_UNITS * (d - fd.min) / (fd.max - fd.min)), auto: st.focusMode === 'manual' ? 0 : 1 };
+    }
+    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 1500);
+    try {
+      const r = await fetch('http://127.0.0.1:8777/focus' + (query || ''), { signal: ctl.signal, cache: 'no-store', targetAddressSpace: 'loopback' });
+      return r.ok ? await r.json() : null;
+    } catch { return null; } finally { clearTimeout(t); }
+  }
+  async function setupFocus(track) {
+    browserCam = null;
+    const caps = track && track.getCapabilities ? track.getCapabilities() : {}, fd = caps.focusDistance;
+    if (fd && fd.max > fd.min) { const h = await helper(); if (!(h && h.value >= 0)) browserCam = { track, caps }; }
+    await connectHelper();
+  }
+  async function connectHelper() {
+    const h = await helper(), ok = !!h && h.value >= 0;
+    focusConnected = ok;
+    $('focusRow').hidden = $('focusBtns').hidden = $('stackRow').hidden = !ok;
+    if (ok) try { $('stackToggle').checked = localStorage.getItem('eggStack') === '1'; } catch {}
+    if (!ok) {
+      $('focusConnect').hidden = !isMac;
+      $('focusNote').textContent = !isMac ? 'This browser cannot set this camera’s focus. On Windows, open this page in Chrome or Edge.'
+        : h ? 'The focus helper is running but cannot reach the Arducam. Check its USB cable and hub, then press Connect focus helper.'
+        : 'To set the focus: download the focus helper, unzip it, double-click “Start focus helper” in its focus_helper folder (if macOS blocks it: right-click it and choose Open) and keep its window open, then press Connect focus helper. If Chrome asks to let this site reach apps on this device, choose Allow.';
+      return false;
+    }
+    const f = $('focus'); f.min = h.min; f.max = h.max; f.step = 1; f.value = h.value;
+    $('focusOut').textContent = h.auto ? 'auto' : h.value;
+    f.oninput = () => { $('focusOut').textContent = f.value; clearTimeout(f.t); f.t = setTimeout(() => helper(`?value=${f.value}`), 60); };
+    $('focusConnect').hidden = true; $('focusNote').textContent = 'Drag Focus, or press Find sharpest focus. Zoom into the pod (click the preview) to judge it.';
+    return true;
+  }
+  $('focusConnectBtn').onclick = async () => {
+    $('focusNote').textContent = 'Connecting…';
+    if (!await connectHelper() && isMac && !await helper()) $('focusNote').textContent = 'Could not reach the focus helper. Is its window open? In Chrome, click the icon at the left of the address bar, open Site settings and set “Local network access” (or “Apps on device”) to Allow, then try again.';
+  };
+  $('focusAutoBtn').onclick = async () => { const h = await helper('?auto=1'); if (h) { $('focusOut').textContent = 'auto'; $('focusNote').textContent = 'Autofocus is on.'; } };
+  // Sharpness of the pod: mean |Laplacian| of the luma over the middle of the frame (what the camera sees, not zoomed).
+  function liveSharpness(src) {
+    const v = src || $('video'), W0 = src ? src.width : v.videoWidth, H0 = src ? src.height : v.videoHeight;
+    const w = 800, h = Math.round(800 * H0 / W0);
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(v, 0, 0, w, h);
+    const x0 = Math.round(w * 0.2), y0 = Math.round(h * 0.25), cw = Math.round(w * 0.6), ch = Math.round(h * 0.5);
+    const d = ctx.getImageData(x0, y0, cw, ch).data, g = new Float32Array(cw * ch);
+    for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2];
+    let sum = 0, n = 0;
+    for (let y = 1; y < ch - 1; y++) for (let x = 1; x < cw - 1; x++) { const i = y * cw + x; sum += Math.abs(4 * g[i] - g[i - 1] - g[i + 1] - g[i - cw] - g[i + cw]); n++; }
+    return sum / n;
+  }
+  let sweeping = false;
+  $('focusSweepBtn').onclick = async () => {
+    if (sweeping || !stream || !focusConnected) return;
+    sweeping = true; $('focusSweepBtn').disabled = true;
+    const f = $('focus'), lo = +f.min, hi = +f.max;
+    const measure = async v => {
+      await helper(`?value=${v}`); await new Promise(r => setTimeout(r, 350));
+      const sc = liveSharpness(); f.value = v; $('focusOut').textContent = v; $('focusNote').textContent = `Trying focus ${v}… sharpness ${sc.toFixed(1)}`;
+      return sc;
+    };
+    let best = lo, bestScore = -1;
+    for (let v = lo; v <= hi && stream; v += 32) { const sc = await measure(v); if (sc > bestScore) { bestScore = sc; best = v; } }
+    const centre = best;
+    for (let v = Math.max(lo, centre - 28); v <= Math.min(hi, centre + 28) && stream; v += 4) { const sc = await measure(v); if (sc > bestScore) { bestScore = sc; best = v; } }
+    await helper(`?value=${best}`); f.value = best; $('focusOut').textContent = best;
+    $('focusNote').textContent = `Focus set to ${best} (sharpness ${bestScore.toFixed(1)}). It stays there until you press Autofocus.`;
+    $('focusSweepBtn').disabled = false; sweeping = false;
+  };
+  // live focus meter
+  setInterval(() => { if (stream && $('video').videoWidth && !sweeping && !capturing) $('focusMeta').textContent = `Sharpness now: ${liveSharpness().toFixed(1)} (higher is sharper)`; else if (!stream) $('focusMeta').textContent = ''; }, 800);
+
   const renderCaptureBtn = () => { const s = nextShot(podId); $('captureBtn').textContent = s ? `Capture ${podId} · ${s}` : `Capture (${podId} has 6 shots)`; };
   $('cameraBtn').onclick = () => startCamera();
   $('camSelect').onchange = () => startCamera($('camSelect').value);
   $('stopCamBtn').onclick = stopCamera;
-  $('captureBtn').onclick = async () => {
-    if (!stream || !video.videoWidth) return;
+  // ---------- focus stack (the Orius page's: per-region sharpest focus, shots across that range, merged in worker.js) ----------
+  const STACK = { grid: 3, coarse: 32, reach: 192, fine: 8, margin: 16, step: 12, maxShots: 16, sweepSettle: 350, settle: 700, drain: 3 };
+  let stackShots = null, stackWorker = null, stackSeq = 0;
+  const stackPending = new Map(), sleep = ms => new Promise(r => setTimeout(r, ms));
+  function stackCall(msg) {
+    if (!stackWorker) {
+      stackWorker = new Worker('worker.js');
+      stackWorker.onmessage = e => {
+        const m = e.data;
+        if (m.progress) { $('captureBtn').textContent = m.progress; return; }
+        const p = stackPending.get(m.seq); if (!p) return; stackPending.delete(m.seq);
+        m.error ? p.reject(new Error(m.error)) : p.resolve(m);
+      };
+    }
+    return new Promise((resolve, reject) => { msg.seq = ++stackSeq; stackPending.set(msg.seq, { resolve, reject }); stackWorker.postMessage(msg); });
+  }
+  $('stackToggle').onchange = () => { try { localStorage.setItem('eggStack', $('stackToggle').checked ? '1' : '0'); } catch {} };
+  const nextFrame = () => new Promise(r => video.requestVideoFrameCallback ? video.requestVideoFrameCallback(() => r()) : setTimeout(r, 120));
+  function grabCanvas() {
     const c = document.createElement('canvas'); c.width = video.videoWidth; c.height = video.videoHeight;
-    c.getContext('2d').drawImage(video, 0, 0);
+    c.getContext('2d', { willReadFrequently: true }).drawImage(video, 0, 0);
+    return { canvas: c, score: liveSharpness(c) };
+  }
+  // Mean |Laplacian| of the luma in each cell of a grid x grid split of the frame's middle 80 %, row by row.
+  function regionSharpness(src, W, H) {
+    const n = STACK.grid, k = Math.min(1, 1600 / W), w = Math.round(W * k), h = Math.round(H * k);
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(src, 0, 0, w, h);
+    const d = ctx.getImageData(0, 0, w, h).data, g = new Float32Array(w * h);
+    for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2];
+    const out = [];
+    for (let r = 0; r < n; r++) for (let q = 0; q < n; q++) {
+      const y0 = Math.round(h * (0.1 + 0.8 * r / n)), y1 = Math.round(h * (0.1 + 0.8 * (r + 1) / n));
+      const x0 = Math.round(w * (0.1 + 0.8 * q / n)), x1 = Math.round(w * (0.1 + 0.8 * (q + 1) / n));
+      let sum = 0, cnt = 0;
+      for (let y = Math.max(1, y0); y < Math.min(h - 1, y1); y++) for (let x = Math.max(1, x0); x < Math.min(w - 1, x1); x++) {
+        const i = y * w + x; sum += Math.abs(4 * g[i] - g[i - 1] - g[i + 1] - g[i - w] - g[i + w]); cnt++;
+      }
+      out.push(sum / cnt);
+    }
+    return out;
+  }
+  function rangePositions(peaks) {
+    const lo = Math.max(1, Math.min(...peaks) - STACK.margin), hi = Math.min(1023, Math.max(...peaks) + STACK.margin);
+    const step = Math.max(STACK.step, Math.ceil((hi - lo) / (STACK.maxShots - 1)));
+    const out = [];
+    for (let v = lo; v < hi; v += step) out.push(v);
+    out.push(hi);
+    return out;
+  }
+  async function regionPeaks(h, centre) {
+    const regions = STACK.grid * STACK.grid, best = Array(regions).fill(-1), at = Array(regions).fill(centre);
+    const measure = async v => {
+      await helper(`?value=${v}`); await sleep(STACK.sweepSettle); await nextFrame();
+      regionSharpness(video, video.videoWidth, video.videoHeight).forEach((x, i) => { if (x > best[i]) { best[i] = x; at[i] = v; } });
+      $('focus').value = v; $('focusOut').textContent = v;
+    };
+    const lo = Math.max(h.min, centre - STACK.reach), hi = Math.min(h.max, centre + STACK.reach);
+    for (let v = lo; v <= hi && stream; v += STACK.coarse) { $('captureBtn').textContent = `Finding each region's focus… ${v}`; await measure(v); }
+    const flo = Math.max(h.min, Math.min(...at) - STACK.margin), fhi = Math.min(h.max, Math.max(...at) + STACK.margin);
+    best.fill(-1);
+    const step = fhi - flo > 160 ? 2 * STACK.fine : STACK.fine;
+    for (let v = flo; v <= fhi && stream; v += step) { $('captureBtn').textContent = `Fine focus per region… ${v} (${flo}–${fhi})`; await measure(v); }
+    return at;
+  }
+  async function findStackRange() {
+    const h = await helper(); if (!h || !stream) return null;
+    const centre = h.auto ? h.value : +$('focus').value;
+    $('captureBtn').disabled = $('stackRangeBtn').disabled = true;
+    try {
+      const peaks = await regionPeaks(h, centre);
+      stackShots = rangePositions(peaks);
+      const mid = stackShots[stackShots.length >> 1];
+      await helper(`?value=${mid}`); $('focus').value = mid; $('focusOut').textContent = mid;
+      $('focusNote').textContent = `Sharpest focus per region (top row first): ${peaks.join(', ')}. ` +
+        (stackShots.length === 1 ? `All sharp at ${stackShots[0]}: stacking takes one shot.` : `Stack range ${stackShots[0]}–${stackShots[stackShots.length - 1]}: shots at ${stackShots.join(', ')}.`);
+    } finally { $('stackRangeBtn').disabled = false; if (!capturing) { renderCaptureBtn(); $('captureBtn').disabled = false; } }
+    return stackShots;
+  }
+  $('stackRangeBtn').onclick = () => { if (!capturing) findStackRange(); };
+  async function stackCapture() {
+    const h = await helper(); if (!h) return null;
+    const centre = h.auto ? h.value : +$('focus').value;
+    const shots = stackShots || await findStackRange();
+    if (!shots) return null;
+    const frames = [];
+    for (const v of shots) {
+      if (!stream) break;
+      $('captureBtn').textContent = `Shooting ${frames.length + 1} of ${shots.length} (focus ${v})…`;
+      await helper(`?value=${v}`); await sleep(STACK.settle);
+      for (let k = 0; k < STACK.drain; k++) await nextFrame();
+      const a = (await nextFrame(), grabCanvas()), b = (await nextFrame(), grabCanvas());
+      const best = a.score >= b.score ? a.canvas : b.canvas;
+      frames.push({ focus: v, blob: new Promise(r => best.toBlob(r, 'image/jpeg', 0.95)) });
+    }
+    $('captureBtn').textContent = 'Aligning and merging…';
+    for (const f of frames) await stackCall({ type: 'stackAdd', blob: await f.blob, focus: f.focus });
+    await helper(`?value=${centre}`); $('focus').value = centre; $('focusOut').textContent = centre;
+    const r = await stackCall({ type: 'stackEnd', ref: frames.length >> 1 });
+    $('focusNote').textContent = `Stacked ${r.frames} shots (focus ${shots[0]}–${shots[shots.length - 1]}). ${Math.round(r.detail * 100)}% of the picture has detail.`;
+    const c = document.createElement('canvas'); c.width = r.width; c.height = r.height;
+    c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(r.rgba), r.width, r.height), 0, 0);
+    return c;
+  }
+
+  let capturing = false;
+  $('captureBtn').onclick = async () => {
+    if (!stream || !video.videoWidth || capturing) return;
+    let c = null, stacked = false;
+    if (focusConnected && $('stackToggle').checked) {
+      capturing = true; $('captureBtn').disabled = true;
+      try { c = await stackCapture(); stacked = !!c; } catch (err) { $('focusNote').textContent = 'Focus stack failed: ' + err.message; }
+      capturing = false; $('captureBtn').disabled = false; renderCaptureBtn();
+      if (!c) return;
+    } else {
+      c = document.createElement('canvas'); c.width = video.videoWidth; c.height = video.videoHeight;
+      c.getContext('2d').drawImage(video, 0, 0);
+    }
     const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.95));
     const shot = nextShot(podId), stamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '_');
-    const name = `${podId.replace(/[^\w-]+/g, '_')}_${shot || 'extra'}_${stamp}.jpg`;
+    const name = `${podId.replace(/[^\w-]+/g, '_')}_${shot || 'extra'}_${stamp}${stacked ? '_stack' : ''}.jpg`;
     addPhoto(blob, name, { select: false });
     $('saveNote').textContent = `Captured ${name}.`;
     renderCaptureBtn(); renderShots();
