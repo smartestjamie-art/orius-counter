@@ -811,7 +811,38 @@ document.documentElement.lang = 'en';
 
   // Free zoom around the pointer: trackpad pinch, Ctrl + wheel or two-finger pinch on touch screens; drag to pan.
   const ZOOM_MAX = 40;
+  // The live camera zooms too: the video and its dot overlay get the same CSS transform, so that video point (x, y)
+  // sits mid-stage.
+  let liveZoom = null; // { s, x, y } in video pixels
+  const liveOn = () => !$('video').hidden && $('video').videoWidth > 0;
+  function applyLiveZoom() {
+    const v = $('video'), o = $('liveOverlay');
+    let t = '';
+    if (liveZoom && v.videoWidth) {
+      const w = v.clientWidth, h = v.clientHeight, k0 = Math.min(w / v.videoWidth, h / v.videoHeight);
+      const ox = (w - v.videoWidth * k0) / 2, oy = (h - v.videoHeight * k0) / 2, z = liveZoom;
+      t = `translate(${w / 2 - z.s * (ox + z.x * k0)}px, ${h / 2 - z.s * (oy + z.y * k0)}px) scale(${z.s})`;
+    } else liveZoom = null;
+    for (const el of [v, o]) { el.style.transformOrigin = '0 0'; el.style.transform = t; }
+    $('zoomFit').disabled = $('zoomOut').disabled = !liveZoom;
+    $('zoomLevel').textContent = liveZoom ? `${liveZoom.s < 10 ? liveZoom.s.toFixed(1) : Math.round(liveZoom.s)}×` : '';
+    drawLive();
+  }
+  function liveZoomAt(clientX, clientY, factor) {
+    const v = $('video'), p = stagePoint({ clientX, clientY }), s = Math.min(ZOOM_MAX, Math.max(1, (liveZoom ? liveZoom.s : 1) * factor));
+    if (s <= 1.001) { liveZoom = null; applyLiveZoom(); return; }
+    const r = $('stage').getBoundingClientRect(), k0 = Math.min(v.clientWidth / v.videoWidth, v.clientHeight / v.videoHeight);
+    liveZoom = { s, x: clampTo(p.x + (r.left + r.width / 2 - clientX) / (k0 * s), v.videoWidth), y: clampTo(p.y + (r.top + r.height / 2 - clientY) / (k0 * s), v.videoHeight) };
+    applyLiveZoom();
+  }
+  function livePan(dx, dy) {
+    const v = $('video'); if (!liveZoom) return;
+    const k = Math.min(v.clientWidth / v.videoWidth, v.clientHeight / v.videoHeight) * liveZoom.s;
+    liveZoom.x = clampTo(liveZoom.x - dx / k, v.videoWidth); liveZoom.y = clampTo(liveZoom.y - dy / k, v.videoHeight);
+    applyLiveZoom();
+  }
   function zoomAt(clientX, clientY, factor) {
+    if (liveOn()) { liveZoomAt(clientX, clientY, factor); return; }
     const ph = selected; if (!ph || !ph.bmp || !viewT) return;
     const r = view.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
     const sx = (clientX - r.left) * dpr, sy = (clientY - r.top) * dpr;
@@ -865,10 +896,26 @@ document.documentElement.lang = 'en';
   ['pointerup', 'pointercancel', 'pointerleave'].forEach(t => view.addEventListener(t, e => { pointers.delete(e.pointerId); if (pointers.size < 2) pinchDist = 0; }));
   // a drag or pinch is not a click
   view.addEventListener('click', e => { if (dragged) { e.stopImmediatePropagation(); dragged = false; } }, true);
-  const zoomCentre = f => { const r = view.getBoundingClientRect(); zoomAt(r.left + r.width / 2, r.top + r.height / 2, f); };
+  const zoomCentre = f => { const r = $('stage').getBoundingClientRect(); zoomAt(r.left + r.width / 2, r.top + r.height / 2, f); };
+  // live camera (the dot overlay is on top): Ctrl/pinch-scroll zooms, scroll or drag pans; a drag does not pin the magnifier
+  const overlay0 = $('liveOverlay');
+  let liveDrag = null;
+  overlay0.addEventListener('wheel', e => {
+    if (!liveOn()) return;
+    if (e.ctrlKey || e.metaKey) { e.preventDefault(); liveZoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * (Math.abs(e.deltaY) < 50 ? 0.01 : 0.002))); }
+    else if (liveZoom) { e.preventDefault(); const line = e.deltaMode === 1 ? 16 : 1; livePan(-e.deltaX * line, -e.deltaY * line); }
+  }, { passive: false });
+  overlay0.addEventListener('pointerdown', e => { liveDrag = { x: e.clientX, y: e.clientY, moved: false }; });
+  overlay0.addEventListener('pointermove', e => {
+    if (!liveDrag || !liveZoom) return;
+    if (!liveDrag.moved && Math.hypot(e.clientX - liveDrag.x, e.clientY - liveDrag.y) < 4) return;
+    if (!liveDrag.moved) overlay0.setPointerCapture(e.pointerId);
+    livePan(e.clientX - liveDrag.x, e.clientY - liveDrag.y); liveDrag.x = e.clientX; liveDrag.y = e.clientY; liveDrag.moved = true;
+  });
+  ['pointerup', 'pointercancel'].forEach(t => overlay0.addEventListener(t, () => setTimeout(() => { liveDrag = null; }, 0)));
   $('zoomIn').onclick = e => { e.stopPropagation(); zoomCentre(2); };
   $('zoomOut').onclick = e => { e.stopPropagation(); zoomCentre(0.5); };
-  $('zoomFit').onclick = e => { e.stopPropagation(); zoom = null; draw(); };
+  $('zoomFit').onclick = e => { e.stopPropagation(); if (liveOn()) { liveZoom = null; applyLiveZoom(); return; } zoom = null; draw(); };
   // ---------- magnifier: the area under the pointer, enlarged in the side panel ----------
   let viewT = null, magAt = null; // viewT: how the photo sits on the stage; magAt: point in photo/frame pixels
   const mag = $('mag');
@@ -889,14 +936,14 @@ document.documentElement.lang = 'en';
   let magPin = null;
   $('stage').addEventListener('pointermove', e => { if (magPin) return; const p = stagePoint(e); if (p) { magAt = p; drawMag(); } });
   $('stage').addEventListener('click', e => {
-    if (e.target.closest('button') || dragged) return; // a drag or pinch of the photo is not a click
+    if (e.target.closest('button') || dragged || (liveDrag && liveDrag.moved)) return; // a drag or pinch is not a click
     const vid = $('video'), live = !vid.hidden && vid.videoWidth > 0;
     if (!live && (!selected || !selected.bmp)) return;
     const p = stagePoint(e); if (!p) return;
     const dpr = window.devicePixelRatio || 1;
     let frame = null;
     if (live) { frame = document.createElement('canvas'); frame.width = vid.videoWidth; frame.height = vid.videoHeight; frame.getContext('2d').drawImage(vid, 0, 0); }
-    const shown = live ? Math.min(vid.clientWidth / vid.videoWidth, vid.clientHeight / vid.videoHeight) : viewT ? viewT.k / dpr : 1;
+    const shown = live ? Math.min(vid.clientWidth / vid.videoWidth, vid.clientHeight / vid.videoHeight) * (liveZoom ? liveZoom.s : 1) : viewT ? viewT.k / dpr : 1;
     magAt = p; magPin = { shown, frame }; drawMag();
   }, true);
   mag.addEventListener('click', () => { magPin = null; drawMag(); });
@@ -913,7 +960,7 @@ document.documentElement.lang = 'en';
     const W = liveMode ? vid.videoWidth : ph.origW, H = liveMode ? vid.videoHeight : ph.origH;
     const at = magAt || { x: W / 2, y: H / 2 };
     // Zoom is relative to the photo as it appears on the stage.
-    const shown = magPin ? magPin.shown : liveMode ? Math.min(vid.clientWidth / W, vid.clientHeight / H) : viewT ? viewT.k / dpr : 1;
+    const shown = magPin ? magPin.shown : liveMode ? Math.min(vid.clientWidth / W, vid.clientHeight / H) * (liveZoom ? liveZoom.s : 1) : viewT ? viewT.k / dpr : 1;
     const scale = shown * +$('magZoom').value * dpr; // magnifier pixels per photo pixel
     const sw = mag.width / scale, sh = mag.height / scale, sx = at.x - sw / 2, sy = at.y - sh / 2;
     ctx.imageSmoothingQuality = 'high';
@@ -944,7 +991,7 @@ document.documentElement.lang = 'en';
       : 'Move the pointer over the photo to inspect the dots.';
   }
 
-  window.addEventListener('resize', () => { draw(); drawLive(); });
+  window.addEventListener('resize', () => { draw(); if (liveOn()) applyLiveZoom(); else drawLive(); });
   $('fullBtn').onclick = e => {
     e.stopPropagation();
     if (document.fullscreenElement) document.exitFullscreen(); else stage.requestFullscreen().catch(() => {});
@@ -1192,6 +1239,7 @@ document.documentElement.lang = 'en';
     hint.textContent = oldHint;
     video.srcObject = stream; await video.play();
     video.hidden = live.hidden = false; view.hidden = true; $('cameraPanel').hidden = false;
+    liveZoom = null; applyLiveZoom();
     $('stageHint').textContent = 'Live preview. Green dots show the latest live count.';
     const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
     const sel = $('camSelect'); sel.textContent = '';
@@ -1214,6 +1262,7 @@ document.documentElement.lang = 'en';
     if (stream) stream.getTracks().forEach(t => t.stop());
     stream = null; browserCam = null; clearInterval(liveTimer); clearInterval(magTimer);
     video.hidden = live.hidden = true; view.hidden = false; $('cameraPanel').hidden = true;
+    liveZoom = null; for (const el of [video, live]) el.style.transform = '';
     renderFix(); draw();
   }
 
@@ -1246,16 +1295,16 @@ document.documentElement.lang = 'en';
   function drawLive() {
     queueMicrotask(drawMag);
     if (live.hidden) return;
-    const rect = live.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
-    live.width = Math.round(rect.width * dpr); live.height = Math.round(rect.height * dpr);
+    const dpr = window.devicePixelRatio || 1, z = liveZoom ? liveZoom.s : 1;
+    live.width = Math.round(live.clientWidth * dpr); live.height = Math.round(live.clientHeight * dpr);
     const ctx = live.getContext('2d'); ctx.clearRect(0, 0, live.width, live.height);
     if (!$('liveToggle').checked || !video.videoWidth) return;
     const k = Math.min(live.width / video.videoWidth, live.height / video.videoHeight);
     const w = video.videoWidth * k, h = video.videoHeight * k, ox = (live.width - w) / 2, oy = (live.height - h) / 2;
     for (const [nymph, color] of [[0, '#22e57f'], [1, NYMPH_COLOR]]) {
       ctx.beginPath();
-      for (const [x, y, n] of livePoints) if (!n === !nymph) { const X = ox + x * w, Y = oy + y * h; ctx.moveTo(X + 2.5 * dpr, Y); ctx.arc(X, Y, 2.5 * dpr, 0, Math.PI * 2); }
-      ctx.fillStyle = color; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.75)'; ctx.lineWidth = dpr; ctx.stroke();
+      for (const [x, y, n] of livePoints) if (!n === !nymph) { const X = ox + x * w, Y = oy + y * h, rr = 2.5 * dpr / z; ctx.moveTo(X + rr, Y); ctx.arc(X, Y, rr, 0, Math.PI * 2); }
+      ctx.fillStyle = color; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.75)'; ctx.lineWidth = dpr / z; ctx.stroke();
     }
   }
 
