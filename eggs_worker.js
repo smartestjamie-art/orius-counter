@@ -4,7 +4,7 @@
 //    from the edge so the bright card next to the pod does not count.
 // 2. Egg caps: pixels brighter AND bluer than their surroundings (green tissue has little blue, a white cap has
 //    plenty), grouped into blobs; keep round blobs of egg size, drop long white slivers (hairs, fibres).
-const VERSION = 'eggs-2';
+const VERSION = 'eggs-3';
 
 self.onmessage = e => {
   const m = e.data;
@@ -84,18 +84,10 @@ function count({ rgb, width: W, height: H, de, contrast, edge }) {
     if (n > maxA || Math.max(x1 - x0, y1 - y0) + 1 > maxSide) big.push({ cx, cy, n, w: x1 - x0 + 1, h: y1 - y0 + 1, peak }); // decided below
     else points.push([cx, cy, Math.round(peak), n]);
   }
-  // Too big for one egg: a compact blob is a clump of touching eggs (common along the seam and in dense patches) and
-  // counts as its area over a single egg's (the median of the single blobs); long thin or huge ones are hairs, fibres
-  // and glare, and are dropped.
-  const singles = points.map(p => p[3]).sort((a, b) => a - b), one = singles.length ? singles[singles.length >> 1] : de * de * 0.6;
-  for (const b of big) {
-    const fill = b.n / (b.w * b.h), long = Math.max(b.w, b.h) / Math.min(b.w, b.h), k = Math.round(b.n / one);
-    if (fill > 0.35 && long < 3 && k >= 1 && k <= 8) {
-      const r = Math.sqrt(b.n / Math.PI) * 0.5;
-      for (let i = 0; i < k; i++) { const t = 2 * Math.PI * i / k; points.push([b.cx + (k > 1 ? r * Math.cos(t) : 0), b.cy + (k > 1 ? r * Math.sin(t) : 0), Math.round(b.peak), 0]); }
-    } else dropped.push([b.cx, b.cy]);
-  }
-  if (self.EGG_DEBUG) self.EGG_DEBUG.info = { one, singles: singles.length, big: big.length, ks: big.map(b => Math.round(b.n / one)) };
+  // Too big or too long for one egg: hairs, fibres, glare, debris and shed skins. (Counting compact ones as clumps of
+  // eggs by area was tried on Pod 6 A3: most of them were pale debris, not eggs, so they are dropped; touching eggs
+  // can be added by hand.)
+  for (const b of big) dropped.push([b.cx, b.cy]);
   for (const p of points) p.length = 3;
 
   // pod outline, every few pixels, for drawing
