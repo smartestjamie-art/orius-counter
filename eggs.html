@@ -94,6 +94,7 @@
     padding: 24px; }
   .stage .busy { position: absolute; left: 12px; bottom: 12px; padding: 6px 10px; border-radius: 6px;
     background: rgba(0, 0, 0, .65); color: #fff; font: 13px var(--font-mono); }
+  .stage video:not([hidden]) ~ .tag { display: none; } /* no example label over the live camera */
   .stage .tag { position: absolute; left: 12px; top: 12px; padding: 4px 8px; border-radius: 6px; background: var(--amber);
     color: #fff; font: 600 12px var(--font-body); letter-spacing: .03em; }
   .mag { display: block; width: 100%; aspect-ratio: 1; max-width: min(100%, 380px); margin-inline: auto; border-radius: 8px; background: var(--stage); cursor: crosshair; }
@@ -593,7 +594,37 @@ document.documentElement.lang = 'en';
 
   // ---------- zoom, pan, click ----------
   const ZOOM_MAX = 40, clampTo = (v, max) => Math.min(max, Math.max(0, v));
+  // The live camera zooms too: the video is scaled with a CSS transform so that video point (x, y) sits mid-stage.
+  let liveZoom = null; // { s, x, y } in video pixels
+  function applyLiveZoom() {
+    const v = $('video');
+    if (!liveZoom || !v.videoWidth) { v.style.transform = ''; liveZoom = null; }
+    else {
+      const w = v.clientWidth, h = v.clientHeight, k0 = Math.min(w / v.videoWidth, h / v.videoHeight);
+      const ox = (w - v.videoWidth * k0) / 2, oy = (h - v.videoHeight * k0) / 2, z = liveZoom;
+      v.style.transformOrigin = '0 0';
+      v.style.transform = `translate(${w / 2 - z.s * (ox + z.x * k0)}px, ${h / 2 - z.s * (oy + z.y * k0)}px) scale(${z.s})`;
+    }
+    $('zoomFit').disabled = $('zoomOut').disabled = !liveZoom;
+    $('zoomLevel').textContent = liveZoom ? `${liveZoom.s < 10 ? liveZoom.s.toFixed(1) : Math.round(liveZoom.s)}×` : '';
+  }
+  function liveZoomAt(clientX, clientY, factor) {
+    const v = $('video'), p = videoPoint({ clientX, clientY }), s = Math.min(ZOOM_MAX, Math.max(1, (liveZoom ? liveZoom.s : 1) * factor));
+    if (s <= 1.001) { liveZoom = null; applyLiveZoom(); return; }
+    // keep the point under the pointer where it is
+    const r = v.parentElement.getBoundingClientRect(), k0 = Math.min(v.clientWidth / v.videoWidth, v.clientHeight / v.videoHeight);
+    const dx = (r.left + r.width / 2 - clientX) / (k0 * s), dy = (r.top + r.height / 2 - clientY) / (k0 * s);
+    liveZoom = { s, x: clampTo(p.x + dx, v.videoWidth), y: clampTo(p.y + dy, v.videoHeight) };
+    applyLiveZoom();
+  }
+  function livePan(dx, dy) {
+    const v = $('video'); if (!liveZoom) return;
+    const k = Math.min(v.clientWidth / v.videoWidth, v.clientHeight / v.videoHeight) * liveZoom.s;
+    liveZoom.x = clampTo(liveZoom.x - dx / k, v.videoWidth); liveZoom.y = clampTo(liveZoom.y - dy / k, v.videoHeight);
+    applyLiveZoom();
+  }
   function zoomAt(clientX, clientY, factor) {
+    if (liveOn()) { liveZoomAt(clientX, clientY, factor); return; }
     const ph = selected; if (!ph || !ph.bmp || !viewT) return;
     const r = view.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
     const sx = (clientX - r.left) * dpr, sy = (clientY - r.top) * dpr;
@@ -646,33 +677,77 @@ document.documentElement.lang = 'en';
     if (fixing && !e.shiftKey && ph.status === 'done') { const p = photoPoint(e); if (p) fixAt(ph, p.x, p.y); return; }
     if (zoom && zoom.s >= 2.9) { zoom = null; draw(); } else zoomAt(e.clientX, e.clientY, 3 / (zoom ? zoom.s : 1));
   });
-  const zoomCentre = f => { const r = view.getBoundingClientRect(); zoomAt(r.left + r.width / 2, r.top + r.height / 2, f); };
+  const zoomCentre = f => { const r = $('stage').getBoundingClientRect(); zoomAt(r.left + r.width / 2, r.top + r.height / 2, f); };
+  // live camera: Ctrl/pinch-scroll zooms, scroll or drag pans, a click pins the magnifier (not after a drag)
+  const video0 = $('video');
+  video0.addEventListener('wheel', e => {
+    if (!liveOn()) return;
+    if (e.ctrlKey || e.metaKey) { e.preventDefault(); liveZoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * (Math.abs(e.deltaY) < 50 ? 0.01 : 0.002))); }
+    else if (liveZoom) { e.preventDefault(); const line = e.deltaMode === 1 ? 16 : 1; livePan(-e.deltaX * line, -e.deltaY * line); }
+  }, { passive: false });
+  let liveDrag = null;
+  video0.addEventListener('pointerdown', e => { liveDrag = { x: e.clientX, y: e.clientY, moved: false }; });
+  video0.addEventListener('pointermove', e => {
+    if (!liveDrag || !liveZoom) return;
+    if (!liveDrag.moved && Math.hypot(e.clientX - liveDrag.x, e.clientY - liveDrag.y) < 4) return;
+    if (!liveDrag.moved) video0.setPointerCapture(e.pointerId);
+    livePan(e.clientX - liveDrag.x, e.clientY - liveDrag.y); liveDrag.x = e.clientX; liveDrag.y = e.clientY; liveDrag.moved = true;
+  });
+  ['pointerup', 'pointercancel'].forEach(t => video0.addEventListener(t, () => { setTimeout(() => { liveDrag = null; }, 0); }));
   $('zoomIn').onclick = () => zoomCentre(2);
   $('zoomOut').onclick = () => zoomCentre(0.5);
-  $('zoomFit').onclick = () => { zoom = null; draw(); };
+  $('zoomFit').onclick = () => { if (liveOn()) { liveZoom = null; applyLiveZoom(); return; } zoom = null; draw(); };
   $('fullBtn').onclick = () => document.fullscreenElement ? document.exitFullscreen() : $('stage').requestFullscreen().catch(() => {});
   document.addEventListener('fullscreenchange', () => { $('fullBtn').textContent = document.fullscreenElement ? 'Exit full screen' : 'Full screen'; draw(); });
-  new ResizeObserver(() => draw()).observe($('stage'));
+  new ResizeObserver(() => { draw(); if (liveOn()) applyLiveZoom(); }).observe($('stage'));
 
   // ---------- magnifier ----------
-  const mag = $('mag'); let magAt = null;
-  view.addEventListener('pointermove', e => { const p = photoPoint(e); if (p) { magAt = p; drawMag(); } });
+  // Follows the pointer over the photo or the live camera. On the live camera a click pins it on a still of that
+  // moment (click the magnifier to follow the pointer again); while following, it refreshes with the video.
+  const mag = $('mag'); let magAt = null, magPin = null, magTimer = null;
+  const liveOn = () => !$('video').hidden && $('video').videoWidth > 0;
+  function videoPoint(e) {
+    const v = $('video'), r = v.getBoundingClientRect(), k = Math.min(r.width / v.videoWidth, r.height / v.videoHeight);
+    return { x: (e.clientX - r.left - (r.width - v.videoWidth * k) / 2) / k, y: (e.clientY - r.top - (r.height - v.videoHeight * k) / 2) / k };
+  }
+  $('stage').addEventListener('pointermove', e => {
+    if (liveOn()) { if (!magPin) { magAt = videoPoint(e); drawMag(); } return; }
+    const p = photoPoint(e); if (p) { magAt = p; drawMag(); }
+  });
+  $('video').addEventListener('click', () => {
+    if (!liveOn() || !magAt || (liveDrag && liveDrag.moved)) return;
+    const v = $('video'), frame = document.createElement('canvas');
+    frame.width = v.videoWidth; frame.height = v.videoHeight; frame.getContext('2d').drawImage(v, 0, 0);
+    magPin = { frame }; drawMag();
+  });
+  mag.addEventListener('click', () => { magPin = null; drawMag(); });
   $('magZoom').oninput = () => { $('magOut').textContent = $('magZoom').value + '×'; drawMag(); };
   function drawMag() {
     const rect = mag.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
-    mag.width = Math.round(rect.width * dpr); mag.height = Math.round(rect.height * dpr);
+    const w = Math.round(rect.width * dpr), h = Math.round(rect.height * dpr);
+    if (!w || !h) return; // folded panel
+    if (mag.width !== w || mag.height !== h) { mag.width = w; mag.height = h; }
     const ctx = mag.getContext('2d'); ctx.clearRect(0, 0, mag.width, mag.height);
-    const ph = selected; if (!ph || !ph.bmp || !viewT) return;
-    const at = magAt || { x: ph.origW / 2, y: ph.origH / 2 };
-    const scale = viewT.k * +$('magZoom').value;
+    const v = $('video'), live = liveOn(), ph = selected;
+    let src, W, H, scale;
+    if (live) {
+      src = magPin ? magPin.frame : v; W = v.videoWidth; H = v.videoHeight;
+      scale = Math.min(v.clientWidth / W, v.clientHeight / H) * (liveZoom ? liveZoom.s : 1) * +$('magZoom').value * dpr;
+    } else {
+      if (!ph || !ph.bmp || !viewT) return;
+      src = ph.bmp; W = ph.origW; H = ph.origH; scale = viewT.k * +$('magZoom').value;
+    }
+    const at = magAt && magAt.x >= 0 && magAt.y >= 0 && magAt.x <= W && magAt.y <= H ? magAt : { x: W / 2, y: H / 2 };
     const sw = mag.width / scale, sh = mag.height / scale, sx = at.x - sw / 2, sy = at.y - sh / 2;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(ph.bmp, sx, sy, sw, sh, 0, 0, mag.width, mag.height);
-    overlay(ctx, ph, (x, y) => [(x - sx) * scale, (y - sy) * scale], scale, dpr, [mag.width, mag.height], 1.8 * dpr);
+    ctx.drawImage(src, sx, sy, sw, sh, 0, 0, mag.width, mag.height);
+    if (!live) overlay(ctx, ph, (x, y) => [(x - sx) * scale, (y - sy) * scale], scale, dpr, [mag.width, mag.height], 1.8 * dpr);
     const cx = mag.width / 2, cy = mag.height / 2, m = 9 * dpr;
     ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = dpr; ctx.beginPath();
     ctx.moveTo(cx - m, cy); ctx.lineTo(cx + m, cy); ctx.moveTo(cx, cy - m); ctx.lineTo(cx, cy + m); ctx.stroke();
-    $('magNote').textContent = magAt ? `x ${Math.round(at.x)}, y ${Math.round(at.y)} · ${$('magZoom').value}× the stage view` : 'Move the pointer over the photo to inspect the dots.';
+    $('magNote').textContent = !magAt ? 'Move the pointer over the photo to inspect the dots.'
+      : `x ${Math.round(at.x)}, y ${Math.round(at.y)} · ${$('magZoom').value}× the stage view` +
+        (live ? (magPin ? ' · pinned: click the magnifier to follow the pointer again' : ' · live · click the preview to pin') : '');
   }
 
   // ---------- panels and lists ----------
@@ -856,6 +931,7 @@ document.documentElement.lang = 'en';
     } finally { clearTimeout(slow); btn.disabled = false; btn.textContent = 'Use camera'; }
     video.srcObject = stream; await video.play();
     video.hidden = false; view.hidden = true; $('cameraPanel').hidden = false;
+    magAt = null; magPin = null; liveZoom = null; applyLiveZoom(); clearInterval(magTimer); magTimer = setInterval(() => { if (!magPin) drawMag(); }, 150);
     const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
     const sel = $('camSelect'); sel.textContent = '';
     for (const d of devs) sel.add(new Option(d.label || 'Camera', d.deviceId));
@@ -867,6 +943,7 @@ document.documentElement.lang = 'en';
     if (!stream) return;
     stream.getTracks().forEach(t => t.stop()); stream = null;
     video.hidden = true; view.hidden = false; $('cameraPanel').hidden = true;
+    clearInterval(magTimer); magTimer = null; magAt = null; magPin = null; liveZoom = null; applyLiveZoom();
     renderFix(); draw();
   }
   const renderCaptureBtn = () => { const s = nextShot(podId); $('captureBtn').textContent = s ? `Capture ${podId} · ${s}` : `Capture (${podId} has 6 shots)`; };
