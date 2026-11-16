@@ -288,7 +288,7 @@
           <input type="range" id="edge" min="0" max="4" step="0.25">
         </div>
         <div class="row"><button class="small" id="autoSizeBtn">Auto egg size</button><button class="small" id="defaultsBtn">Defaults</button></div>
-        <p class="note">Auto size is the photo width ÷ 530, about right for the Arducam 16MP on the copy stand. Changes recount every photo.</p>
+        <p class="note">Auto size is the photo width ÷ 660 (7 px on the Arducam 16MP on the rail), checked against eggs counted by eye. Changes recount every photo.</p>
       </div>
 
       <div class="panel">
@@ -346,7 +346,7 @@ document.documentElement.lang = 'en';
 (() => {
   const $ = id => document.getElementById(id);
   const SHOTS = ['A1', 'A2', 'A3', 'B1', 'B2', 'B3'];
-  const DEFAULTS = { eggPx: null, contrast: 18, edge: 1.3, autoOverlap: true, trim: { 1: [0, 100], 2: [0, 100], 3: [0, 100] } };
+  const DEFAULTS = { eggPx: null, contrast: 14, edge: 1.3, autoOverlap: true, trim: { 1: [0, 100], 2: [0, 100], 3: [0, 100] } };
   let settings = structuredClone(DEFAULTS), podId = 'Pod 1';
   try {
     const s = JSON.parse(localStorage.getItem('eggSettings') || 'null');
@@ -394,7 +394,8 @@ document.documentElement.lang = 'en';
   // ---------- adding and counting ----------
   let queue = Promise.resolve();
   const enqueue = fn => (queue = queue.then(fn, fn));
-  const autoPx = W => Math.max(2, Math.round(W / 530 * 2) / 2);
+  // eggs on the pod rig (Arducam 16MP on the rail, 12 Nov) are about 7 px across in a 4656 px photo
+  const autoPx = W => Math.max(2, Math.round(W / 660 * 2) / 2);
   const eggPxFor = ph => settings.eggPx || autoPx(ph.origW || 1600);
 
   // A short pod may need only 1 or 2 marks per side: "Side B next" (or any B shot already in) moves on to side B.
@@ -928,7 +929,9 @@ document.documentElement.lang = 'en';
     const [a, b] = areaPct(ph);
     $('countMeta').textContent = ph.status !== 'done' ? ph.status + '…' :
       `${ph.example ? 'Example photo · ' : ''}Shot ${ph.shot || '–'}, ${shots.length} of 6 shots of this pod in.` +
-      `${a > 0 || b < 100 ? ` Counting ${a}–${b}% of the width.` : ''} Egg size ${ph.eggD} px, found in ${ph.ms} ms.`;
+      `${a > 0 || b < 100 ? ` Counting ${a}–${b}% of the width.` : ''} Egg size ${ph.eggD} px, found in ${ph.ms} ms.` +
+      // many spots thrown out as too big: the eggs are larger than the egg size (on Pod 6, 2 px dropped 503 eggs)
+      ((ph.dropped || []).length > 0.3 * Math.max(1, (ph.points || []).length) ? ` ⚠ ${ph.dropped.length} spots were too big for a ${ph.eggD} px egg: the egg size is probably too small (press Auto egg size).` : '');
     renderMatchNote();
   }
   const areaPct = ph => areaOf(ph).map(v => Math.round(v / ph.origW * 1000) / 10);
@@ -1066,7 +1069,8 @@ document.documentElement.lang = 'en';
   $('contrast').oninput = () => { settings.contrast = +$('contrast').value; saveSettings(); renderSettings(); recountAll(); };
   $('edge').oninput = () => { settings.edge = +$('edge').value; saveSettings(); renderSettings(); recountAll(); };
   $('autoSizeBtn').onclick = () => { settings.eggPx = null; saveSettings(); renderSettings(); recountAll(); };
-  $('defaultsBtn').onclick = () => { const { trim, learned } = settings; settings = { ...structuredClone(DEFAULTS), trim, learned }; saveSettings(); renderSettings(); recountAll(); };
+  // back to the detection defaults; the rig set-up (mark edges, remembered and hand-set joins) stays
+  $('defaultsBtn').onclick = () => { const { trim, learned, calib } = settings; settings = { ...structuredClone(DEFAULTS), trim, learned, calib }; saveSettings(); renderSettings(); recountAll(); };
 
   // ---------- adding photos ----------
   $('addBtn').onclick = () => $('fileInput').click();
