@@ -714,8 +714,11 @@ document.documentElement.lang = 'en';
     if (liveOn()) { if (!magPin) { magAt = videoPoint(e); drawMag(); } return; }
     const p = photoPoint(e); if (p) { magAt = p; drawMag(); }
   });
-  $('video').addEventListener('click', () => {
-    if (!liveOn() || !magAt || (liveDrag && liveDrag.moved)) return;
+  $('video').addEventListener('click', e => {
+    if (!liveOn() || (liveDrag && liveDrag.moved)) return;
+    // as on a photo: zoom 3x at the click, or back to the whole picture; the magnifier stays on that spot
+    magAt = videoPoint(e); // before the zoom moves the picture
+    if (liveZoom && liveZoom.s >= 2.9) { liveZoom = null; applyLiveZoom(); } else liveZoomAt(e.clientX, e.clientY, 3 / (liveZoom ? liveZoom.s : 1));
     const v = $('video'), frame = document.createElement('canvas');
     frame.width = v.videoWidth; frame.height = v.videoHeight; frame.getContext('2d').drawImage(v, 0, 0);
     magPin = { frame }; drawMag();
@@ -851,7 +854,7 @@ document.documentElement.lang = 'en';
   function renderFix() {
     $('fixBtn').setAttribute('aria-pressed', fixing); $('fixBtn').textContent = fixing ? 'Done correcting' : 'Correct mistakes';
     $('stage').classList.toggle('correcting', fixing); $('fixKey').hidden = !fixing;
-    $('stageHint').textContent = !$('video').hidden ? 'Live preview. Line the pod up with the rail mark, then press Capture.'
+    $('stageHint').textContent = !$('video').hidden ? 'Live preview. Line the pod up with the rail mark, then press Capture. Click to zoom 3× or back; Ctrl + scroll or pinch to zoom, drag to move.'
       : fixing ? 'Click a dot that is not an egg to strike it out, or a missed egg to add it. Click a mark again to undo. Shift-click zooms.'
       : 'Click to zoom 3× or back; pinch or Ctrl + scroll to zoom, scroll or drag to move around. Drop photos on it to add them.';
     const ph = selected, f = ph && ph.fix;

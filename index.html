@@ -942,6 +942,9 @@ document.documentElement.lang = 'en';
     const p = stagePoint(e); if (!p) return;
     const dpr = window.devicePixelRatio || 1;
     let frame = null;
+    if (live) { // as on a photo: zoom 3x at the click, or back to the whole picture
+      if (liveZoom && liveZoom.s >= 2.9) { liveZoom = null; applyLiveZoom(); } else liveZoomAt(e.clientX, e.clientY, 3 / (liveZoom ? liveZoom.s : 1));
+    }
     if (live) { frame = document.createElement('canvas'); frame.width = vid.videoWidth; frame.height = vid.videoHeight; frame.getContext('2d').drawImage(vid, 0, 0); }
     const shown = live ? Math.min(vid.clientWidth / vid.videoWidth, vid.clientHeight / vid.videoHeight) * (liveZoom ? liveZoom.s : 1) : viewT ? viewT.k / dpr : 1;
     magAt = p; magPin = { shown, frame }; drawMag();
@@ -1240,7 +1243,7 @@ document.documentElement.lang = 'en';
     video.srcObject = stream; await video.play();
     video.hidden = live.hidden = false; view.hidden = true; $('cameraPanel').hidden = false;
     liveZoom = null; applyLiveZoom();
-    $('stageHint').textContent = 'Live preview. Green dots show the latest live count.';
+    $('stageHint').textContent = 'Live preview. Green dots show the latest live count. Click to zoom 3× or back (it also pins the magnifier); Ctrl + scroll or pinch to zoom, drag to move.';
     const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
     const sel = $('camSelect'); sel.textContent = '';
     for (const d of devs) sel.add(new Option(d.label || 'Camera', d.deviceId));
