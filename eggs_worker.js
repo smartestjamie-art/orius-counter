@@ -127,7 +127,6 @@ function match({ a, b, ma, mb, width: W, height: H, near }) {
       if (Math.abs(s) > W - minOv * f) continue;
       const c = ncc(A, B, W, H, s, dy); if (c > fine.score) fine = { score: c, s, dy };
     }
-  if (self.MATCH_DEBUG) self.MATCH_DEBUG.scores = scores;
   return { s: fine.s, dy: fine.dy, score: fine.score, second, coarse: best.score, masked: !!MAs };
 }
 

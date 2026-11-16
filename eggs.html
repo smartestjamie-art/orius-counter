@@ -355,7 +355,7 @@ document.documentElement.lang = 'en';
   } catch {}
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-16c'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-16d'; // bump with every change to a worker, so a browser never keeps an old copy
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
   worker.onmessage = e => { const p = pending.get(e.data.seq); if (p) { pending.delete(e.data.seq); e.data.error ? p.reject(new Error(e.data.error)) : p.resolve(e.data); } };
