@@ -58,25 +58,35 @@
   .key { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; color: var(--muted); margin: 8px 0; }
   .key i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 1px solid #000; margin-right: 5px; vertical-align: 0; }
   .key span:last-child i { border: 2px solid; width: 8px; height: 8px; }
-  /* The photo takes the room left by the side panels; from 1600 px the panels form two columns. */
-  .grid { display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 24vw, 400px); grid-template-rows: auto 1fr;
+  /* The photo takes the room left by one column of side panels. That column stays in view and scrolls by itself, so
+     the photo never leaves the screen while its controls are used. Below 860 px everything stacks. */
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 26vw, 400px); grid-template-rows: auto 1fr;
     grid-template-areas: "photo side" "list side"; gap: 16px; align-items: start; }
   .photo-area { grid-area: photo; min-width: 0; }
-  .grid > aside { grid-area: side; }
+  .grid > aside { grid-area: side; position: sticky; top: 12px; max-height: calc(100dvh - 24px); overflow-y: auto;
+    overscroll-behavior: contain; scrollbar-width: thin; padding-right: 2px; }
   .photos-panel { grid-area: list; }
-  @media (max-width: 1000px) { .grid { grid-template-columns: minmax(0, 1fr) 260px; } }
-  @media (min-width: 1600px) {
-    .grid { grid-template-columns: minmax(0, 1fr) clamp(620px, 36vw, 820px); }
-    .grid > aside { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
-    .grid > aside > .panel:first-child { grid-column: 1 / -1; }
-  }
-  @media (max-width: 700px) {
+  @media (max-width: 860px) {
     .grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; grid-template-areas: "photo" "side" "list"; }
+    .grid > aside { position: static; max-height: none; overflow: visible; }
   }
+  /* Side panels fold: click a heading. */
+  aside .panel > h2 { cursor: pointer; display: flex; align-items: center; justify-content: space-between; user-select: none; }
+  aside .panel > h2::after { content: "–"; font: 600 15px/1 var(--font-mono); color: var(--muted); }
+  aside .panel.shut > h2 { margin-bottom: 0; }
+  aside .panel.shut > h2::after { content: "+"; }
+  aside .panel.shut > :not(h2) { display: none !important; }
+  /* Close-pair review: its answers sit right under the photo. */
+  .reviewBar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 8px; padding: 10px 12px;
+    background: var(--surface); border: 2px solid var(--amber); border-radius: 10px; }
+  .reviewBar .meta { margin: 0; flex: 1 1 220px; color: var(--ink); font-weight: 600; }
+  .reviewBar .row { gap: 6px; }
+  kbd { font: 600 11px var(--font-mono); padding: 1px 5px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: var(--muted); margin-left: 4px; }
 
   /* As wide as the column allows, but never taller than the window. */
   .stage { position: relative; background: var(--stage); border-radius: 10px; overflow: hidden; aspect-ratio: 4 / 3;
     width: min(100%, calc((100dvh - 90px) * 4 / 3)); margin-inline: auto; touch-action: manipulation; }
+  .photo-area.reviewing .stage { width: min(100%, calc((100dvh - 190px) * 4 / 3)); } /* room for the review bar */
   .stage:fullscreen { width: 100vw; height: 100vh; aspect-ratio: auto; border-radius: 0; }
   .stage .zoomBar { position: absolute; right: 10px; top: 10px; z-index: 2; display: flex; gap: 6px; align-items: center; }
   .stage .zoomBar button { padding: 6px 10px; font-size: 13px; opacity: .88; min-width: 32px; }
@@ -119,8 +129,10 @@
   td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
   tr.sel td { background: var(--accent-soft); }
   tbody tr { cursor: pointer; }
-  td.num { font: 600 15px var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
-  td.name { overflow-wrap: anywhere; }
+  td.num { font: 600 15px var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  td.name { overflow-wrap: anywhere; min-width: 150px; }
+  .photos-panel table { min-width: 640px; }
+  .photos-panel td:nth-child(2), .photos-panel td:nth-child(3) { white-space: nowrap; }
   .status { font-size: 13px; color: var(--muted); }
   .pill { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px; font-weight: 600;
     background: var(--accent-soft); color: var(--accent); }
@@ -161,6 +173,21 @@
           <button id="zoomIn" title="Zoom in" aria-label="Zoom in">+</button>
           <button id="zoomFit" title="Show the whole photo">Fit</button>
           <button id="fullBtn" title="Show the photo full screen (Esc to leave)">Full screen</button>
+        </div>
+      </div>
+      <div id="pairPanel" class="reviewBar" hidden>
+        <p class="meta" id="pairMeta"></p>
+        <div class="row" id="pairAnswers">
+          <button class="small" id="pairOne">One insect <kbd>1</kbd></button>
+          <button class="small" id="pairOneAdult" hidden>One adult <kbd>A</kbd></button>
+          <button class="small" id="pairOneNymph" hidden>One nymph <kbd>N</kbd></button>
+          <button class="small" id="pairTwo">Two insects <kbd>2</kbd></button>
+        </div>
+        <div class="row">
+          <button class="small" id="pairPrev" title="Previous pair (left arrow)">◀</button>
+          <button class="small" id="pairNext" title="Next pair (right arrow)">▶</button>
+          <button class="small" id="pairNextOpen">Next unanswered</button>
+          <button class="small" id="pairStop">Stop <kbd>Esc</kbd></button>
         </div>
       </div>
       <p class="hint" id="stageHint">Pinch (or Ctrl + scroll) to zoom, scroll or drag to move around, click to zoom 3× or back. Drop photos on it to add them.</p>
@@ -249,20 +276,6 @@
           insect most often gets two dots. Answer each one; the answers correct the count and are exported with the
           corrections, to train an automatic check later.</p>
         <div class="row"><button id="pairBtn" aria-pressed="false">Review close pairs</button></div>
-        <div id="pairPanel" hidden>
-          <p class="meta" id="pairMeta"></p>
-          <div class="row" id="pairAnswers">
-            <button class="small" id="pairTwo">Two insects <kbd>2</kbd></button>
-            <button class="small" id="pairOne">One insect <kbd>1</kbd></button>
-            <button class="small" id="pairOneAdult" hidden>One adult <kbd>A</kbd></button>
-            <button class="small" id="pairOneNymph" hidden>One nymph <kbd>N</kbd></button>
-          </div>
-          <div class="row">
-            <button class="small" id="pairPrev">◀ Previous</button>
-            <button class="small" id="pairNext">Next ▶</button>
-            <button class="small" id="pairNextOpen">Next unanswered</button>
-          </div>
-        </div>
         <p class="note" id="pairNote"></p>
       </div>
 
@@ -697,7 +710,7 @@ document.documentElement.lang = 'en';
     }, 20);
   }
   function stopReview() {
-    review = null; $('pairPanel').hidden = true; $('pairBtn').setAttribute('aria-pressed', 'false'); $('pairBtn').textContent = 'Review close pairs';
+    review = null; zoom = null; $('pairPanel').hidden = true; $('stage').parentElement.classList.remove('reviewing'); $('pairBtn').setAttribute('aria-pressed', 'false'); $('pairBtn').textContent = 'Review close pairs';
     renderPairNote(); draw();
   }
   function renderPairNote() {
@@ -708,7 +721,7 @@ document.documentElement.lang = 'en';
 
   function showPair() {
     const r = review; if (!r) return;
-    $('pairPanel').hidden = false; $('pairBtn').setAttribute('aria-pressed', 'true'); $('pairBtn').textContent = 'Stop reviewing';
+    $('pairPanel').hidden = false; $('stage').parentElement.classList.add('reviewing'); $('pairBtn').setAttribute('aria-pressed', 'true'); $('pairBtn').textContent = 'Stop reviewing';
     if (!r.pairs.length) { $('pairMeta').textContent = 'No close pairs without a gap on this photo.'; $('pairAnswers').hidden = true; $('pairNote').textContent = ''; draw(); return; }
     $('pairAnswers').hidden = false;
     const pr = r.pairs[r.at], ans = pairAnswer(r.ph, pr), done = r.pairs.filter(p => answeredByHand(r.ph, p)).length;
@@ -762,6 +775,7 @@ document.documentElement.lang = 'en';
   }
 
   $('pairBtn').onclick = () => review ? stopReview() : startReview();
+  $('pairStop').onclick = () => stopReview();
   $('pairTwo').onclick = () => answerPair(false);
   $('pairOne').onclick = () => answerPair(true);
   $('pairOneAdult').onclick = () => answerPair(true, 'adult');
@@ -1635,6 +1649,27 @@ document.documentElement.lang = 'en';
       (warn ? ` — ${warn}. Level the dish and camera, or wait for autofocus.` : ' — even');
     $('focusMeta').style.color = warn ? 'var(--danger)' : '';
   }, 700);
+
+  // ---------- side panels fold on a click on their heading (remembered) ----------
+  {
+    let shut = null;
+    try { shut = JSON.parse(localStorage.getItem('oriusShut')); } catch {}
+    if (!Array.isArray(shut)) shut = ['Thresholds', 'Show']; // rarely needed, folded until asked for
+    for (const h of document.querySelectorAll('aside .panel > h2')) {
+      const panel = h.parentElement, name = h.textContent.trim();
+      panel.classList.toggle('shut', shut.includes(name));
+      h.tabIndex = 0; h.setAttribute('role', 'button'); h.setAttribute('aria-expanded', !panel.classList.contains('shut'));
+      const flip = () => {
+        const now = panel.classList.toggle('shut');
+        h.setAttribute('aria-expanded', !now);
+        shut = now ? [...new Set([...shut, name])] : shut.filter(n => n !== name);
+        try { localStorage.setItem('oriusShut', JSON.stringify(shut)); } catch {}
+        if (!now) drawMag();
+      };
+      h.onclick = flip;
+      h.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flip(); } };
+    }
+  }
 
   // ---------- start with the example ----------
   renderList(); renderCount(); renderFix();
