@@ -111,6 +111,8 @@
   .slider { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: center; margin: 10px 0; }
   .slider input { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
   .slider output { font: 600 14px var(--font-mono); font-variant-numeric: tabular-nums; }
+  .focusRange { grid-column: 1 / -1; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px 8px; color: var(--muted); font-size: 12px; }
+  .focusRange[hidden] { display: none; }
   .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .check { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 14px; }
   .check input { accent-color: var(--accent); }
@@ -223,6 +225,7 @@
         <div class="slider" id="focusRow" hidden>
           <label for="focus">Focus</label><output id="focusOut"></output>
           <input type="range" id="focus">
+          <div class="focusRange" id="focusRange" hidden><span id="focusRangeText"></span><button class="small" id="focusFullBtn"></button></div>
         </div>
         <div class="row" id="focusBtns" hidden>
           <button class="small" id="focusSweepBtn">Find sharpest focus</button>
@@ -357,7 +360,7 @@ document.documentElement.lang = 'en';
   } catch {}
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-16o'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-16p'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -1174,7 +1177,7 @@ document.documentElement.lang = 'en';
         : 'To set the focus: download the focus helper, unzip it, double-click “Start focus helper” in its focus_helper folder (if macOS blocks it: right-click it and choose Open) and keep its window open, then press Connect focus helper. If Chrome asks to let this site reach apps on this device, choose Allow.';
       return false;
     }
-    const f = $('focus'); f.min = h.min; f.max = h.max; f.step = 1; f.value = h.value;
+    const f = $('focus'); focusHW = { min: h.min, max: h.max }; f.step = 1; applyFocusWindow(); f.value = h.value;
     $('focusOut').textContent = h.auto ? 'auto' : h.value;
     f.oninput = () => {
       stackShots = null; // the stack range was found around another focus
@@ -1186,6 +1189,40 @@ document.documentElement.lang = 'en';
     $('focusNote').textContent = 'Connecting…';
     if (!await connectHelper() && isMac && !await helper()) $('focusNote').textContent = 'Could not reach the focus helper. Is its window open? In Chrome, click the icon at the left of the address bar, open Site settings and set “Local network access” (or “Apps on device”) to Allow, then try again.';
   };
+  // ---------- the sharp focus window, learned from every focus search on this computer ----------
+  // Each search keeps the focus values at which some part of the pod was sharpest. The slider and the next searches
+  // cover only those, FOCUS_PAD either side: the rest of the range is blurry on this rig, and the slider gets finer. A
+  // search whose sharp parts touch the window's edge looks over the whole range again, so a pod sitting higher or lower
+  // widens the window; only the last FOCUS_KEEP searches count, so it narrows again after the rig is changed.
+  const FOCUS_PAD = 40, FOCUS_KEEP = 8;
+  let focusHW = { min: 1, max: 1023 }, focusFull = false;
+  try { focusFull = localStorage.getItem('eggFocusFull') === '1'; } catch {}
+  function focusSeen() {
+    let w = null; try { w = JSON.parse(localStorage.getItem('eggFocusWindow')); } catch {}
+    if (w && Array.isArray(w.seen)) return w.seen.filter(s => Array.isArray(s) && s[1] >= s[0]);
+    let old = null; try { old = JSON.parse(localStorage.getItem('eggStackRange')); } catch {} // the stack range kept by earlier versions
+    return old && old.hi >= old.lo ? [[old.lo, old.hi]] : [];
+  }
+  function focusWindow() {
+    const seen = focusSeen(); if (!seen.length) return null;
+    return { lo: Math.max(focusHW.min, Math.min(...seen.map(s => s[0])) - FOCUS_PAD),
+      hi: Math.min(focusHW.max, Math.max(...seen.map(s => s[1])) + FOCUS_PAD), n: seen.length };
+  }
+  function learnFocus(lo, hi) {
+    const seen = focusSeen().concat([[Math.round(lo), Math.round(hi)]]).slice(-FOCUS_KEEP);
+    try { localStorage.setItem('eggFocusWindow', JSON.stringify({ seen })); localStorage.removeItem('eggStackRange'); } catch {}
+    applyFocusWindow();
+  }
+  function applyFocusWindow() {
+    const f = $('focus'), v = f.value, win = focusWindow(), narrow = win && !focusFull;
+    f.min = narrow ? win.lo : focusHW.min; f.max = narrow ? win.hi : focusHW.max; f.value = v;
+    $('focusRange').hidden = !win;
+    if (!win) return;
+    $('focusRangeText').textContent = focusFull ? `Whole range ${focusHW.min}–${focusHW.max}`
+      : `Sharp range ${win.lo}–${win.hi} (learned from ${win.n} search${win.n > 1 ? 'es' : ''})`;
+    $('focusFullBtn').textContent = focusFull ? 'Sharp range only' : 'Whole range';
+  }
+  $('focusFullBtn').onclick = () => { focusFull = !focusFull; try { localStorage.setItem('eggFocusFull', focusFull ? '1' : '0'); } catch {} applyFocusWindow(); };
   $('focusAutoBtn').onclick = async () => { stackShots = null; const h = await helper('?auto=1'); if (h) { $('focusOut').textContent = 'auto'; $('focusNote').textContent = 'Autofocus is on.'; } };
   // Sharpness of the pod: mean |Laplacian| of the luma over the middle of the frame (what the camera sees, not zoomed).
   function liveSharpness(src) {
@@ -1201,20 +1238,26 @@ document.documentElement.lang = 'en';
     return sum / n;
   }
   let sweeping = false;
-  $('focusSweepBtn').onclick = async () => { stackShots = null;
+  $('focusSweepBtn').onclick = async () => {
     if (sweeping || !stream || !focusConnected) return;
-    sweeping = true; $('focusSweepBtn').disabled = true;
-    const f = $('focus'), lo = +f.min, hi = +f.max;
+    stackShots = null; sweeping = true; $('focusSweepBtn').disabled = true;
+    const f = $('focus'), win = focusWindow(), all = focusHW, step = win ? 16 : 32, scores = new Map();
+    let lo = win ? win.lo : all.min, hi = win ? win.hi : all.max, best = lo, bestScore = -1;
     const measure = async v => {
-      await helper(`?value=${v}`); await new Promise(r => setTimeout(r, 350));
-      const sc = liveSharpness(); f.value = v; $('focusOut').textContent = v; $('focusNote').textContent = `Trying focus ${v}… sharpness ${sc.toFixed(1)}`;
+      if (scores.has(v)) return scores.get(v);
+      await helper(`?value=${v}`); await sleep(350);
+      const sc = liveSharpness(); scores.set(v, sc); f.value = v; $('focusOut').textContent = v; $('focusNote').textContent = `Trying focus ${v}… sharpness ${sc.toFixed(1)}`;
+      if (sc > bestScore) { bestScore = sc; best = v; }
       return sc;
     };
-    let best = lo, bestScore = -1;
-    for (let v = lo; v <= hi && stream; v += 32) { const sc = await measure(v); if (sc > bestScore) { bestScore = sc; best = v; } }
+    for (let v = lo; v < hi && stream; v += step) await measure(v);
+    if (stream) await measure(hi);
+    // sharpest at the window's edge: the pod sits higher or lower than before, so go on past it while it gets sharper
+    while (stream && best === lo && lo > all.min) { lo = Math.max(all.min, lo - step); if (await measure(lo) < bestScore) break; }
+    while (stream && best === hi && hi < all.max) { hi = Math.min(all.max, hi + step); if (await measure(hi) < bestScore) break; }
     const centre = best;
-    for (let v = Math.max(lo, centre - 28); v <= Math.min(hi, centre + 28) && stream; v += 4) { const sc = await measure(v); if (sc > bestScore) { bestScore = sc; best = v; } }
-    await helper(`?value=${best}`); f.value = best; $('focusOut').textContent = best;
+    for (let v = Math.max(all.min, centre - step + 4); v <= Math.min(all.max, centre + step - 4) && stream; v += 4) await measure(v);
+    await helper(`?value=${best}`); learnFocus(best, best); f.value = best; $('focusOut').textContent = best;
     $('focusNote').textContent = `Focus set to ${best} (sharpness ${bestScore.toFixed(1)}). It stays there until you press Autofocus.`;
     $('focusSweepBtn').disabled = false; sweeping = false;
   };
@@ -1226,9 +1269,15 @@ document.documentElement.lang = 'en';
   $('camSelect').onchange = () => startCamera($('camSelect').value);
   $('stopCamBtn').onclick = stopCamera;
   // ---------- focus stack (the Orius page's: per-region sharpest focus, shots across that range, merged in worker.js) ----------
-  // step 20: on the rail rig one shot is sharp over about +-25 focus units, so 20 apart leaves no gap; settle 450 ms:
-  // the frames moved only ~4 px between shots at 700 ms
-  const STACK = { grid: 3, coarse: 24, wide: 48, near: 120, fine: 10, margin: 16, step: 20, maxShots: 10, sweepSettle: 300, settle: 450, drain: 2 };
+  // The pod is measured in a cols x rows grid over the whole frame (border left out), counting only pod pixels, so the
+  // rims and both ends of the frame get their own sharpest focus: on the closer rig the outline was sharpest 30-50 below
+  // the middle and a tilted tray put the frame's ends 220 apart, and the old 3 x 3 grid over the middle missed both.
+  // A cell counts when at least `cover` of it is pod and its sharpness changes `useful` x over the whole range (2 x inside
+  // the learned window); empty card corners change at most 2.4 x, pod cells 6 x or more.
+  // step: one shot is sharp (80 %) over about +-12 focus units, so shots at most 25 apart (12 shots for a range of 272);
+  // settle 450 ms: the frames moved only ~4 px between shots at 700 ms
+  const STACK = { cols: 12, rows: 9, border: 0.03, cover: 0.05, useful: 3, usefulNear: 2, coarse: 24, wide: 48, fine: 20, margin: 16,
+    lone: 64, step: 20, maxShots: 12, sweepSettle: 300, settle: 450, drain: 2 };
   let stackShots = null, stackWorker = null, stackSeq = 0;
   const stackPending = new Map(), sleep = ms => new Promise(r => setTimeout(r, ms));
   function stackCall(msg) {
@@ -1250,76 +1299,143 @@ document.documentElement.lang = 'en';
     c.getContext('2d', { willReadFrequently: true }).drawImage(video, 0, 0);
     return { canvas: c, score: liveSharpness(c) };
   }
-  // Mean |Laplacian| of the luma in each cell of a grid x grid split of the frame's middle 80 %, row by row.
-  function regionSharpness(src, W, H) {
-    const n = STACK.grid, k = Math.min(1, 1600 / W), w = Math.round(W * k), h = Math.round(H * k);
+  function frameData(src, w, h) {
     const c = document.createElement('canvas'); c.width = w; c.height = h;
     const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(src, 0, 0, w, h);
-    const d = ctx.getImageData(0, 0, w, h).data, g = new Float32Array(w * h);
-    for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2];
-    const out = [];
-    for (let r = 0; r < n; r++) for (let q = 0; q < n; q++) {
-      const y0 = Math.round(h * (0.1 + 0.8 * r / n)), y1 = Math.round(h * (0.1 + 0.8 * (r + 1) / n));
-      const x0 = Math.round(w * (0.1 + 0.8 * q / n)), x1 = Math.round(w * (0.1 + 0.8 * (q + 1) / n));
-      let sum = 0, cnt = 0;
-      for (let y = Math.max(1, y0); y < Math.min(h - 1, y1); y++) for (let x = Math.max(1, x0); x < Math.min(w - 1, x1); x++) {
-        const i = y * w + x; sum += Math.abs(4 * g[i] - g[i - 1] - g[i + 1] - g[i - w] - g[i + w]); cnt++;
+    return ctx.getImageData(0, 0, w, h).data;
+  }
+  function boxMean(m, w, h, r) { // mean of m over a (2r+1)^2 square (clipped at the borders), from an integral image
+    const W1 = w + 1, I = new Float64Array(W1 * (h + 1)), out = new Float32Array(w * h);
+    for (let y = 0; y < h; y++) { let s = 0; for (let x = 0; x < w; x++) { s += m[y * w + x]; I[(y + 1) * W1 + x + 1] = I[y * W1 + x + 1] + s; } }
+    for (let y = 0; y < h; y++) {
+      const y0 = Math.max(0, y - r), y1 = Math.min(h, y + r + 1);
+      for (let x = 0; x < w; x++) {
+        const x0 = Math.max(0, x - r), x1 = Math.min(w, x + r + 1);
+        out[y * w + x] = (I[y1 * W1 + x1] - I[y0 * W1 + x1] - I[y1 * W1 + x0] + I[y0 * W1 + x0]) / ((y1 - y0) * (x1 - x0));
       }
-      out.push(sum / cnt);
     }
     return out;
   }
+  // Which grid cell each pod pixel of the working-size frame counts for (-1: not counted). Pod: green, deep or pale,
+  // smoothed to drop specks, then widened by 1.5 % of the width so the brown seam and the outline (where the curved pod
+  // falls away from the lens) count too. With hardly any green in view, every pixel counts.
+  function stackCells(src, W, H) {
+    const k = Math.min(1, 1600 / W), w = Math.round(W * k), h = Math.round(H * k), d = frameData(src, w, h), n = w * h;
+    const green = new Uint8Array(n);
+    for (let i = 0, j = 0; i < n; i++, j += 4) green[i] = d[j + 1] > d[j] + 12 && d[j + 1] > d[j + 2] + 3 ? 1 : 0;
+    const smooth = boxMean(green, w, h, 4), core = new Uint8Array(n);
+    for (let i = 0; i < n; i++) core[i] = smooth[i] > 0.5 ? 1 : 0;
+    const wide = boxMean(core, w, h, Math.round(0.015 * w));
+    let pod = 0; for (let i = 0; i < n; i++) if (wide[i] > 0) pod++;
+    const usePod = pod > 0.03 * n, { cols, rows, border: B } = STACK, cellOf = new Int16Array(n).fill(-1), cover = new Float64Array(cols * rows);
+    for (let y = 0; y < h; y++) {
+      const fy = (y / h - B) / (1 - 2 * B); if (fy < 0 || fy >= 1) continue;
+      for (let x = 0; x < w; x++) {
+        const fx = (x / w - B) / (1 - 2 * B), i = y * w + x; if (fx < 0 || fx >= 1 || (usePod && !(wide[i] > 0))) continue;
+        const c = Math.floor(fy * rows) * cols + Math.floor(fx * cols); cellOf[i] = c; cover[c]++;
+      }
+    }
+    const area = n * (1 - 2 * B) ** 2 / (cols * rows);
+    return { w, h, cellOf, cover: Array.from(cover, c => c / area), pod: usePod };
+  }
+  // Mean squared Laplacian of the luma over each cell's pod pixels.
+  function regionSharpness(src, cells) {
+    const { w, h, cellOf, cover } = cells, d = frameData(src, w, h), g = new Float32Array(w * h);
+    for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2];
+    const s = new Float64Array(cover.length), cnt = new Float64Array(cover.length);
+    for (let y = 1; y < h - 1; y++) for (let x = 1, i = y * w + 1; x < w - 1; x++, i++) {
+      const c = cellOf[i]; if (c < 0) continue;
+      const l = 4 * g[i] - g[i - 1] - g[i + 1] - g[i - w] - g[i + w]; s[c] += l * l; cnt[c]++;
+    }
+    return Array.from(s, (v, c) => cnt[c] ? v / cnt[c] : 0);
+  }
   function rangePositions(peaks) {
-    const lo = Math.max(1, Math.min(...peaks) - STACK.margin), hi = Math.min(1023, Math.max(...peaks) + STACK.margin);
+    const lo = Math.round(Math.max(focusHW.min, Math.min(...peaks) - STACK.margin)), hi = Math.round(Math.min(focusHW.max, Math.max(...peaks) + STACK.margin));
     const step = Math.max(STACK.step, Math.ceil((hi - lo) / (STACK.maxShots - 1)));
     const out = [];
     for (let v = lo; v < hi; v += step) out.push(v);
     out.push(hi);
     return out;
   }
-  async function regionPeaks(h, centre) {
-    const regions = STACK.grid * STACK.grid, best = Array(regions).fill(-1), at = Array(regions).fill(centre), worst = Array(regions).fill(Infinity);
+  // The sharpest focus of each part of the pod. Searched inside the learned sharp window first (pods sit at about the
+  // same height on one rig), every STACK.coarse, the peak placed by a parabola through the best value and its
+  // neighbours. With no window yet, nothing sharp in it, or sharp parts at its edge (the pod sits higher or lower):
+  // the whole range every STACK.wide, then every STACK.fine around what was found.
+  // Returns { list: the cells' peaks, left / right: the median peak of the frame's three left / right columns }.
+  async function regionPeaks(h) {
+    await nextFrame();
+    const cells = stackCells(video, video.videoWidth, video.videoHeight), pts = [];
     const measure = async v => {
       await helper(`?value=${v}`); await sleep(STACK.sweepSettle); await nextFrame();
-      regionSharpness(video, video.videoWidth, video.videoHeight).forEach((x, i) => { if (x < worst[i]) worst[i] = x; if (x > best[i]) { best[i] = x; at[i] = v; } });
-      $('focus').value = v; $('focusOut').textContent = v;
+      pts.push([v, regionSharpness(video, cells)]); $('focus').value = v; $('focusOut').textContent = v;
     };
-    // First near the last range found on this rig (pods sit at about the same height): +-STACK.near around it. Only if
-    // the sharp regions are not inside that window, or there is no last range, the whole focus range is swept (coarser).
-    let last = null;
-    try { last = JSON.parse(localStorage.getItem('eggStackRange')); } catch {}
-    const sweep = async (lo, hi, step) => { for (let v = lo; v <= hi && stream; v += step) { $('captureBtn').textContent = `Finding each region's focus… ${v}`; await measure(v); } };
-    const usefulOf = () => at.map((_, i) => best[i] > 1.3 * worst[i]);
-    let lo = h.min, hi = h.max;
-    if (last && last.lo != null) {
-      lo = Math.max(h.min, last.lo - STACK.near); hi = Math.min(h.max, last.hi + STACK.near);
-      await sweep(lo, hi, STACK.coarse);
-      const u = usefulOf(), edge = at.some((v, i) => u[i] && ((v - lo < STACK.coarse && lo > h.min) || (hi - v < STACK.coarse && hi < h.max)));
-      if (!u.some(Boolean) || edge) { // not found in the window: the whole range after all
-        best.fill(-1); worst.fill(Infinity); lo = h.min; hi = h.max; await sweep(lo, hi, STACK.wide);
+    const sweep = async (lo, hi, step, what) => {
+      for (let v = lo; stream; v = Math.min(hi, v + step)) { $('captureBtn').textContent = `${what}… ${v}`; await measure(v); if (v >= hi) break; }
+    };
+    // a cell's peak among the points from `from` on, or null: too little pod in it, or its sharpness changes less than
+    // `useful` x over all points (plain card, an empty corner)
+    const peaksOf = (from, useful) => cells.cover.map((cv, c) => {
+      const q = pts.slice(from).sort((a, b) => a[0] - b[0]);
+      if (cv < STACK.cover || q.length < 3) return null;
+      let worst = Infinity; for (const p of pts) worst = Math.min(worst, p[1][c]);
+      let bi = 0; q.forEach((p, i) => { if (p[1][c] > q[bi][1][c]) bi = i; });
+      if (!(q[bi][1][c] > useful * worst)) return null;
+      let v = q[bi][0];
+      if (bi > 0 && bi < q.length - 1 && q[bi][0] - q[bi - 1][0] === q[bi + 1][0] - q[bi][0]) {
+        const ya = q[bi - 1][1][c], yb = q[bi][1][c], yc = q[bi + 1][1][c], den = ya - 2 * yb + yc;
+        if (den < 0) v += 0.5 * (ya - yc) / den * (q[bi][0] - q[bi - 1][0]);
       }
-    } else await sweep(lo, hi, STACK.wide);
-    // regions whose sharpness hardly changes (plain card, background) say nothing about the focus: left out
-    const useful = usefulOf(); if (!useful.some(Boolean)) useful.fill(true);
-    const atU = at.filter((_, i) => useful[i]);
-    const flo = Math.max(h.min, Math.min(...atU) - STACK.margin), fhi = Math.min(h.max, Math.max(...atU) + STACK.margin);
-    best.fill(-1);
-    const step = fhi - flo > 160 ? 2 * STACK.fine : STACK.fine;
-    for (let v = flo; v <= fhi && stream; v += step) { $('captureBtn').textContent = `Fine focus per region… ${v} (${flo}–${fhi})`; await measure(v); }
-    return at.filter((_, i) => useful[i]);
+      return v;
+    });
+    const found = peaks => peaks.filter(v => v != null).sort((a, b) => a - b);
+    const dropLone = peaks => { // one cell far beyond all the others (a speck, a reflection) does not stretch the range
+      for (;;) {
+        const p = found(peaks); if (p.length < 5) return peaks;
+        if (p[1] - p[0] > STACK.lone) peaks[peaks.indexOf(p[0])] = null;
+        else if (p[p.length - 1] - p[p.length - 2] > STACK.lone) peaks[peaks.indexOf(p[p.length - 1])] = null;
+        else return peaks;
+      }
+    };
+    const win = focusWindow();
+    let peaks = null;
+    if (win) {
+      const lo = Math.max(h.min, win.lo), hi = Math.min(h.max, win.hi);
+      await sweep(lo, hi, STACK.coarse, 'Finding the focus of each part of the pod');
+      const p = found(peaks = dropLone(peaksOf(0, STACK.usefulNear)));
+      if (!p.length || (p[0] - lo < STACK.coarse && lo > h.min) || (hi - p[p.length - 1] < STACK.coarse && hi < h.max)) peaks = null;
+    }
+    if (!peaks && stream) {
+      pts.length = 0;
+      await sweep(h.min, h.max, STACK.wide, 'Finding the focus of each part of the pod (whole range)');
+      const p = found(dropLone(peaksOf(0, STACK.useful)));
+      if (p.length) {
+        const from = pts.length, flo = Math.round(Math.max(h.min, p[0] - STACK.margin)), fhi = Math.round(Math.min(h.max, p[p.length - 1] + STACK.margin));
+        await sweep(flo, fhi, STACK.fine, `Fine focus per part (${flo}–${fhi})`);
+        peaks = dropLone(peaksOf(from, STACK.useful));
+      }
+    }
+    let list = peaks ? found(peaks) : [];
+    if (!list.length && pts.length) { // nothing changes clearly: the focus where the whole pod is sharpest
+      const sum = pts.map(p => [p[0], p[1].reduce((a, b) => a + b, 0)]).sort((a, b) => b[1] - a[1]);
+      list = [sum[0][0]];
+    }
+    const side = (c0, c1) => { const v = peaks ? found(peaks.map((x, c) => c % STACK.cols >= c0 && c % STACK.cols <= c1 ? x : null)) : []; return v.length ? v[v.length >> 1] : null; };
+    return { list, left: side(0, 2), right: side(STACK.cols - 3, STACK.cols - 1) };
   }
   async function findStackRange() {
     const h = await helper(); if (!h || !stream) return null;
-    const centre = h.auto ? h.value : +$('focus').value;
     $('captureBtn').disabled = $('stackRangeBtn').disabled = true;
     try {
-      const peaks = await regionPeaks(h, centre);
-      stackShots = rangePositions(peaks);
-      try { localStorage.setItem('eggStackRange', JSON.stringify({ lo: stackShots[0], hi: stackShots[stackShots.length - 1] })); } catch {}
+      const r = await regionPeaks(h); if (!r.list.length) return null;
+      const lo = Math.round(r.list[0]), hi = Math.round(r.list[r.list.length - 1]);
+      learnFocus(lo, hi);
+      stackShots = rangePositions(r.list);
       const mid = stackShots[stackShots.length >> 1];
       await helper(`?value=${mid}`); $('focus').value = mid; $('focusOut').textContent = mid;
-      $('focusNote').textContent = `Sharpest focus per region (top row first): ${peaks.join(', ')}. ` +
-        (stackShots.length === 1 ? `All sharp at ${stackShots[0]}: stacking takes one shot.` : `Stack range ${stackShots[0]}–${stackShots[stackShots.length - 1]}: shots at ${stackShots.join(', ')}.`);
+      const tilt = r.left != null && r.right != null && Math.abs(r.left - r.right) > 100
+        ? ` The left end of the picture is sharpest at ${Math.round(r.left)} and the right end at ${Math.round(r.right)}: the tray or the camera is tilted. Level them and fewer shots are needed, each sharper.` : '';
+      $('focusNote').textContent = `Sharpest focus over the pod, rims and both ends included: ${lo}–${hi} (${r.list.length} parts). ` +
+        (stackShots.length === 1 ? `All sharp at ${stackShots[0]}: stacking takes one shot.` : `Stack range ${stackShots[0]}–${stackShots[stackShots.length - 1]}: ${stackShots.length} shots at ${stackShots.join(', ')}.`) + tilt;
     } finally { $('stackRangeBtn').disabled = false; if (!capturing) { renderCaptureBtn(); $('captureBtn').disabled = false; } }
     return stackShots;
   }
