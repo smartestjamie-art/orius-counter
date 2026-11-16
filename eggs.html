@@ -852,7 +852,15 @@ document.documentElement.lang = 'en';
       head.append(save);
       const width = Math.max(320, box.clientWidth || 800) * (window.devicePixelRatio || 1);
       const fullW = Math.max(...parts.map(p => p.ox + p.x1)) - Math.min(...parts.map(p => p.ox + p.x0));
-      wrap.append(head, stitchCanvas(parts, Math.min(1, width / fullW)));
+      const view0 = stitchCanvas(parts, Math.min(1, width / fullW));
+      view0.style.cursor = 'zoom-in'; view0.title = 'Open full size in a new tab';
+      view0.onclick = async () => { // full resolution in a new tab, where it can be zoomed freely
+        const tab = window.open('', '_blank');
+        const full = stitchCanvas(stitchLayout(sideShots(pod, side)), 1);
+        const blob = await new Promise(r => full.toBlob(r, 'image/jpeg', 0.92));
+        if (tab) tab.location.href = URL.createObjectURL(blob);
+      };
+      wrap.append(head, view0);
       box.append(wrap);
     }
   }
@@ -928,7 +936,9 @@ document.documentElement.lang = 'en';
       rm.onclick = e => { e.stopPropagation(); removePhoto(ph); render(); draw(); };
       btns.appendChild(rm);
       tr.append(name, n, btns);
-      tr.onclick = () => { stopCamera(); select(ph); };
+      // open it on the stage, which is above the list: bring the stage into view
+      tr.onclick = () => { stopCamera(); select(ph); $('stage').scrollIntoView({ block: 'start' }); };
+      tr.title = 'Open on the stage';
       tb.appendChild(tr);
     }
   }
