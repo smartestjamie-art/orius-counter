@@ -127,6 +127,11 @@
   td.num { font: 600 15px var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
   td.name { overflow-wrap: anywhere; min-width: 150px; }
   .photos-panel table { min-width: 520px; }
+  .stitch { margin: 8px 0 16px; }
+  .stitch .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-bottom: 6px; }
+  .stitch .head b { font: 600 15px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--accent); }
+  .stitch .head .meta { margin: 0; flex: 1 1 200px; }
+  .stitch canvas { display: block; width: 100%; border-radius: 8px; background: var(--stage); }
   .status { font-size: 13px; color: var(--muted); }
   .pill { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px; font-weight: 600;
     background: var(--accent-soft); color: var(--accent); }
@@ -301,6 +306,12 @@
     </aside>
 
   <div class="panel photos-panel">
+    <div id="stitchBox" hidden>
+      <h2 id="stitchTitle">Stitched pod</h2>
+      <p class="note" style="margin-top:0">Each side's shots joined where they overlap: every part of the pod appears once, so
+        every egg is counted once. Updates as shots come in.</p>
+      <div id="stitchSides"></div>
+    </div>
     <h2>Pods</h2>
     <div class="table-wrap">
       <table>
@@ -769,7 +780,78 @@ document.documentElement.lang = 'en';
   }
 
   // ---------- panels and lists ----------
-  function render() { updateMatches(); renderCount(); renderShots(); renderList(); renderPods(); renderFix(); renderSettings(); }
+  function render() { updateMatches(); renderCount(); renderShots(); renderList(); renderPods(); renderFix(); renderSettings(); renderStitch(); }
+
+  // ---------- stitched pod: each side's shots joined at their seams ----------
+  // Shot b's counted part starts where shot a's ends, so b sits at a's offset + a.x1 - b.x0 (with a matched overlap
+  // that is exactly the shift s), and dy from the match lines them up vertically.
+  function sideShots(pod, side) {
+    return [1, 2, 3].map(n => photos.find(p => p.pod === pod && p.shot === side + n && p.bmp && p.status === 'done')).filter(Boolean);
+  }
+  function stitchLayout(shots) {
+    let ox = 0, oy = 0;
+    return shots.map((ph, i) => {
+      const [x0, x1] = areaOf(ph);
+      if (i) {
+        const a = shots[i - 1], [, ax1] = areaOf(a), m = matchOf(a, ph);
+        ox += ax1 - x0; if (m && m.ok && +posOf(ph) === +posOf(a) + 1) oy += m.dy;
+      }
+      return { ph, x0, x1, ox, oy };
+    });
+  }
+  function stitchCanvas(parts, scale) {
+    const left = Math.min(...parts.map(p => p.ox + p.x0)), right = Math.max(...parts.map(p => p.ox + p.x1));
+    const top = Math.min(...parts.map(p => p.oy)), bottom = Math.max(...parts.map(p => p.oy + p.ph.origH));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round((right - left) * scale)); c.height = Math.max(1, Math.round((bottom - top) * scale));
+    const ctx = c.getContext('2d'); ctx.imageSmoothingQuality = 'high';
+    let n = 0;
+    for (const { ph, x0, x1, ox, oy } of parts)
+      ctx.drawImage(ph.bmp, x0, 0, x1 - x0, ph.origH, (ox + x0 - left) * scale, (oy - top) * scale, (x1 - x0) * scale, ph.origH * scale);
+    if ($('showMarks').checked) {
+      const r = Math.max(1.6, (parts[0].ph.eggD || 4) * scale * 0.45);
+      ctx.beginPath();
+      for (const { ph, x0, x1, ox, oy } of parts) {
+        const m = marks(ph);
+        for (const [x, y] of m.kept.concat(m.added)) if (x >= x0 && x <= x1) {
+          const X = (ox + x - left) * scale, Y = (oy + y - top) * scale; ctx.moveTo(X + r, Y); ctx.arc(X, Y, r, 0, Math.PI * 2); n++;
+        }
+      }
+      ctx.fillStyle = '#22e57f'; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.lineWidth = 1; ctx.stroke();
+    }
+    return c;
+  }
+  let stitchSig = '';
+  function renderStitch() {
+    const pod = selected && !selected.example ? selected.pod : podId;
+    const sides = ['A', 'B'].map(side => ({ side, shots: sideShots(pod, side) })).filter(x => x.shots.length >= 2);
+    const sig = pod + '|' + $('showMarks').checked + '|' + sides.map(x => x.shots.map(p => [p.key, areaOf(p).map(Math.round), countOf(p)].join(':')).join(',')).join(';');
+    if (sig === stitchSig) return;
+    stitchSig = sig;
+    $('stitchBox').hidden = !sides.length;
+    const box = $('stitchSides'); box.textContent = '';
+    if (!sides.length) return;
+    $('stitchTitle').textContent = `Stitched pod · ${pod}`;
+    for (const { side, shots } of sides) {
+      const parts = stitchLayout(shots), total = shots.reduce((t, p) => t + (countOf(p) || 0), 0);
+      const joins = shots.slice(1).map((b, i) => { const sh = shiftFor(shots[i], b); return sh ? (sh.src === 'match' ? 'matched' : 'remembered') : 'mark edges'; });
+      const wrap = document.createElement('div'); wrap.className = 'stitch';
+      const head = document.createElement('div'); head.className = 'head';
+      head.innerHTML = `<span>Side ${side}</span><b>${total} eggs</b><span class="meta"></span>`;
+      head.querySelector('.meta').textContent = `${shots.map(p => p.shot).join(' + ')} · joins: ${joins.join(', ')}`;
+      const save = document.createElement('button'); save.className = 'small'; save.textContent = 'Save stitched JPG';
+      save.onclick = async () => {
+        const full = stitchCanvas(stitchLayout(sideShots(pod, side)), 1);
+        const blob = await new Promise(r => full.toBlob(r, 'image/jpeg', 0.92));
+        download(blob, `${pod.replace(/[^\w-]+/g, '_')}_side${side}_stitched.jpg`);
+      };
+      head.append(save);
+      const width = Math.max(320, box.clientWidth || 800) * (window.devicePixelRatio || 1);
+      const fullW = Math.max(...parts.map(p => p.ox + p.x1)) - Math.min(...parts.map(p => p.ox + p.x0));
+      wrap.append(head, stitchCanvas(parts, Math.min(1, width / fullW)));
+      box.append(wrap);
+    }
+  }
   const podPhotos = pod => photos.filter(p => p.pod === pod);
   const podTotal = pod => podPhotos(pod).reduce((a, p) => a + (countOf(p) || 0), 0);
 
@@ -878,7 +960,7 @@ document.documentElement.lang = 'en';
   }
   $('fixBtn').onclick = () => { fixing = !fixing; if (fixing) $('showMarks').checked = true; renderFix(); draw(); };
   $('fixClear').onclick = () => { const ph = selected; if (!ph) return; ph.fix = { removed: [], added: [] }; savePhoto(ph); render(); draw(); };
-  $('showMarks').onchange = $('showPod').onchange = () => draw();
+  $('showMarks').onchange = $('showPod').onchange = () => { draw(); renderStitch(); };
 
   // ---------- pod ID ----------
   $('podId').value = podId;
