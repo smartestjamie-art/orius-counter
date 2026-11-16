@@ -470,9 +470,13 @@ document.documentElement.lang = 'en';
     const w = THUMB_W, h = Math.round(bmp.height * w / bmp.width);
     const c = new OffscreenCanvas(w, h), ctx = c.getContext('2d', { willReadFrequently: true });
     ctx.imageSmoothingQuality = 'high'; ctx.drawImage(bmp, 0, 0, w, h);
-    const d = ctx.getImageData(0, 0, w, h).data, g = new Float32Array(w * h);
-    for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2];
-    return { g, w, h };
+    const d = ctx.getImageData(0, 0, w, h).data, g = new Float32Array(w * h), m = new Uint8Array(w * h);
+    for (let i = 0, j = 0; i < g.length; i++, j += 4) {
+      const R = d[j], G = d[j + 1], B = d[j + 2], mx = Math.max(R, G, B), mn = Math.min(R, G, B);
+      g[i] = 0.299 * R + 0.587 * G + 0.114 * B;
+      m[i] = mx > 0 && (mx - mn) / mx > 0.22 && G > B + 15 ? 1 : 0; // green pod, as in the egg detector
+    }
+    return { g, m, w, h };
   }
   const matches = new Map(); // 'keyA|keyB' -> { s, dy, score, second, ok } with s in original pixels; 'pending' while working
   const neighbour = (ph, step) => {
@@ -486,7 +490,7 @@ document.documentElement.lang = 'en';
       const key = a.key + '|' + b.key; if (matches.has(key)) continue;
       if (a.thumb.w !== b.thumb.w || a.thumb.h !== b.thumb.h) { matches.set(key, { ok: false, why: 'different photo sizes' }); continue; }
       matches.set(key, 'pending');
-      call({ type: 'match', a: a.thumb.g.slice().buffer, b: b.thumb.g.slice().buffer, width: a.thumb.w, height: a.thumb.h })
+      call({ type: 'match', a: a.thumb.g.slice().buffer, b: b.thumb.g.slice().buffer, ma: a.thumb.m.slice().buffer, mb: b.thumb.m.slice().buffer, width: a.thumb.w, height: a.thumb.h })
         .then(r => {
           const k = a.origW / a.thumb.w;
           // a clear peak: decent correlation, well above the best other shift

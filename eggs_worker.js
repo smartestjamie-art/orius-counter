@@ -89,10 +89,21 @@ function count({ rgb, width: W, height: H, de, contrast, edge }) {
 // lighting (high-pass) and clipping strong edges, so the pod outline does not outweigh everything else.
 // Coarse search over every shift on a quarter-size copy, then refined at full thumbnail size.
 // score: normalised correlation at the best shift; second: best score at a clearly different shift.
-function match({ a, b, width: W, height: H }) {
+// Only the pod is matched (ma, mb: green-pod masks): the camera, rail, background and lighting stay put while the
+// tray slides, so they would pull the match towards no shift at all.
+function match({ a, b, ma, mb, width: W, height: H }) {
   const A = texture(new Float32Array(a), W, H), B = texture(new Float32Array(b), W, H);
   const f = 4, w = Math.floor(W / f), h = Math.floor(H / f);
   const As = shrink(A, W, H, f), Bs = shrink(B, W, H, f);
+  let MA = null, MB = null, MAs = null, MBs = null;
+  if (ma && mb) {
+    MA = podMask(new Uint8Array(ma), W, H); MB = podMask(new Uint8Array(mb), W, H);
+    MAs = shrinkMask(MA, W, H, f); MBs = shrinkMask(MB, W, H, f);
+    // too little pod in either shot: match the whole picture as before
+    const share = v => v.reduce((t, x) => t + x, 0) / v.length;
+    if (share(MAs) < 0.03 || share(MBs) < 0.03) MA = MB = MAs = MBs = null;
+  }
+  const ncc = (P, Q, ww, hh, s, dy) => MAs ? nccMasked(P, Q, ww === W ? MA : MAs, ww === W ? MB : MBs, ww, hh, s, dy) : nccPlain(P, Q, ww, hh, s, dy);
   const minOv = Math.round(w * 0.06), maxDy = Math.round(h * 0.08);
   let best = { score: -2 }, scores = [];
   for (let s = -(w - minOv); s <= w - minOv; s++) {
@@ -108,7 +119,7 @@ function match({ a, b, width: W, height: H }) {
       if (Math.abs(s) > W - minOv * f) continue;
       const c = ncc(A, B, W, H, s, dy); if (c > fine.score) fine = { score: c, s, dy };
     }
-  return { s: fine.s, dy: fine.dy, score: fine.score, second, coarse: best.score };
+  return { s: fine.s, dy: fine.dy, score: fine.score, second, coarse: best.score, masked: !!MAs };
 }
 
 function texture(g, W, H) {
@@ -128,7 +139,33 @@ function shrink(v, W, H, f) {
   }
   return out;
 }
-function ncc(A, B, W, H, s, dy) { // b pixel (x, y) against a pixel (x + s, y + dy), over the part both cover
+// pod in both shots: the mask cleaned of specks and slightly shrunk, so the pod's own texture is matched, not its rim
+function podMask(m, W, H) { return erode(dilate(erode(m, W, H, 1), W, H, 1), W, H, 2); }
+function shrinkMask(m, W, H, f) {
+  const w = Math.floor(W / f), h = Math.floor(H / f), out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let s = 0;
+    for (let j = 0; j < f; j++) for (let i = 0; i < f; i++) s += m[(y * f + j) * W + x * f + i];
+    out[y * w + x] = s * 2 > f * f ? 1 : 0;
+  }
+  return out;
+}
+// as nccPlain, over pixels that are pod in both shots; needs a fair amount of shared pod
+function nccMasked(A, B, MA, MB, W, H, s, dy) {
+  const x0 = Math.max(0, -s), x1 = Math.min(W, W - s), y0 = Math.max(0, -dy), y1 = Math.min(H, H - dy);
+  let n = 0, sa = 0, sb = 0, sab = 0, saa = 0, sbb = 0;
+  for (let y = y0; y < y1; y++) {
+    const ra = (y + dy) * W + s, rb = y * W;
+    for (let x = x0; x < x1; x++) {
+      if (!MA[ra + x] || !MB[rb + x]) continue;
+      const p = A[ra + x], q = B[rb + x]; sa += p; sb += q; sab += p * q; saa += p * p; sbb += q * q; n++;
+    }
+  }
+  if (n < Math.max(50, 0.02 * W * H)) return -2;
+  const cov = sab - sa * sb / n, va = saa - sa * sa / n, vb = sbb - sb * sb / n;
+  return va > 0 && vb > 0 ? cov / Math.sqrt(va * vb) : -2;
+}
+function nccPlain(A, B, W, H, s, dy) { // b pixel (x, y) against a pixel (x + s, y + dy), over the part both cover
   const x0 = Math.max(0, -s), x1 = Math.min(W, W - s), y0 = Math.max(0, -dy), y1 = Math.min(H, H - dy);
   let n = 0, sa = 0, sb = 0, sab = 0, saa = 0, sbb = 0;
   for (let y = y0; y < y1; y++) {
