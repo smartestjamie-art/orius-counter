@@ -115,7 +115,8 @@ function count({ rgb, width: W, height: H, de, contrast, edge }) {
 function match({ a, b, ma, mb, width: W, height: H, near }) {
   const A = texture(new Float32Array(a), W, H), B = texture(new Float32Array(b), W, H);
   // half-size search: at quarter size the pod's fine surface texture is gone and the match lands on the wrong shift
-  const f = +(self.MATCH_F || 2), w = Math.floor(W / f), h = Math.floor(H / f);
+  // (and coarser for big or tall thumbnails, so the search never takes more than a few seconds)
+  const f = +(self.MATCH_F || Math.max(2, Math.ceil(Math.sqrt(W * H / 80000)))), w = Math.floor(W / f), h = Math.floor(H / f);
   const As = shrink(A, W, H, f), Bs = shrink(B, W, H, f);
   let MA = null, MB = null, MAs = null, MBs = null;
   if (ma && mb) {
@@ -129,7 +130,7 @@ function match({ a, b, ma, mb, width: W, height: H, near }) {
   const podN = v => v ? v.reduce((t, x) => t + x, 0) : 0;
   const needFull = MA ? Math.max(50, 0.125 * Math.min(podN(MA), podN(MB))) : 0, needSmall = MAs ? Math.max(30, 0.125 * Math.min(podN(MAs), podN(MBs))) : 0;
   const ncc = (P, Q, ww, hh, s, dy) => MAs ? nccMasked(P, Q, ww === W ? MA : MAs, ww === W ? MB : MBs, ww, hh, s, dy, ww === W ? needFull : needSmall) : nccPlain(P, Q, ww, hh, s, dy);
-  const minOv = Math.round(w * 0.06), maxDy = Math.round(h * 0.08); // the tray slides along the rail, but A1-A2 on the real rig moved 6 % down
+  const minOv = Math.round(w * 0.06), maxDy = Math.min(24, Math.round(h * 0.08)); // the tray slides along the rail, but A1-A2 on the real rig moved 6 % down
   // near: the shift this pair of rail marks is known to have (fraction of the width): search only close to it
   const sLo = near != null ? Math.round((near - 0.06) * w) : -(w - minOv), sHi = near != null ? Math.round((near + 0.06) * w) : w - minOv;
   let best = { score: -2 }, scores = [];

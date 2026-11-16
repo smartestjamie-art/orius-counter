@@ -151,7 +151,7 @@
   td select, td input[type="text"] { padding: 5px 6px; font-size: 13px; }
   td input[type="text"] { width: 9em; }
   .field { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: center; margin: 8px 0; font-size: 14px; }
-  .shots { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
+  .shots { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 10px; }
   .shots span { border: 1px solid var(--line); border-radius: 7px; padding: 6px 8px; font-size: 12px; color: var(--muted);
     display: flex; justify-content: space-between; gap: 6px; }
   .shots span b { font: 600 13px var(--font-mono); color: var(--ink); font-variant-numeric: tabular-nums; }
@@ -205,8 +205,8 @@
         <h2>Pod</h2>
         <div class="field"><label for="podId">Pod ID</label><input type="text" id="podId" spellcheck="false" autocomplete="off"></div>
         <div class="row"><button class="small" id="flipBtn">Side B next</button><button class="small" id="newPodBtn">Next pod</button></div>
-        <p class="note">New photos go to this pod, in order: side A at rail marks 1, 2, 3, then flip and side B at 1, 2, 3.
-          A short pod that needs only marks 1 and 2: press <b>Side B next</b> after A2.
+        <p class="note">New photos go to this pod, in order: side A at rail marks 1, 2, 3, 4, then flip and side B at 1, 2, 3, 4.
+          A short pod that needs fewer marks: press <b>Side B next</b> after its last A shot.
           Change a photo's pod or shot in the list.</p>
         <div class="shots" id="shots"></div>
       </div>
@@ -246,7 +246,7 @@
           such as a short pod with only plain card in the overlap.</p>
         <div class="row"><button class="small" id="forgetBtn">Forget remembered overlaps</button></div>
         <p class="note">Where no match is found (or matching is off), count between these edges for each mark:</p>
-        <div class="field"><label for="trimPos">Mark</label><select id="trimPos"><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></div>
+        <div class="field"><label for="trimPos">Mark</label><select id="trimPos"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></div>
         <div class="slider"><label for="trimL">Count from</label><output id="trimLOut"></output><input type="range" id="trimL" min="0" max="50" step="1"></div>
         <div class="slider"><label for="trimR">Count to</label><output id="trimROut"></output><input type="range" id="trimR" min="50" max="100" step="1"></div>
       </div>
@@ -322,8 +322,8 @@
     <h2>Pods</h2>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Pod</th><th style="text-align:right">A1</th><th style="text-align:right">A2</th><th style="text-align:right">A3</th>
-          <th style="text-align:right">B1</th><th style="text-align:right">B2</th><th style="text-align:right">B3</th><th style="text-align:right">Total</th></tr></thead>
+        <thead><tr><th>Pod</th><th style="text-align:right">A1</th><th style="text-align:right">A2</th><th style="text-align:right">A3</th><th style="text-align:right">A4</th>
+          <th style="text-align:right">B1</th><th style="text-align:right">B2</th><th style="text-align:right">B3</th><th style="text-align:right">B4</th><th style="text-align:right">Total</th></tr></thead>
         <tbody id="podList"></tbody>
       </table>
     </div>
@@ -345,8 +345,9 @@
 document.documentElement.lang = 'en';
 (() => {
   const $ = id => document.getElementById(id);
-  const SHOTS = ['A1', 'A2', 'A3', 'B1', 'B2', 'B3'];
-  const DEFAULTS = { eggPx: null, contrast: 14, edge: 1.3, autoOverlap: true, trim: { 1: [0, 100], 2: [0, 100], 3: [0, 100] } };
+  const MARKS = 4; // rail marks per side: a pod needs four shots to be covered
+  const SHOTS = ['A', 'B'].flatMap(side => Array.from({ length: MARKS }, (_, i) => side + (i + 1)));
+  const DEFAULTS = { eggPx: null, contrast: 14, edge: 1.3, autoOverlap: true, trim: { 1: [0, 100], 2: [0, 100], 3: [0, 100], 4: [0, 100] } };
   let settings = structuredClone(DEFAULTS), podId = 'Pod 1';
   try {
     const s = JSON.parse(localStorage.getItem('eggSettings') || 'null');
@@ -355,7 +356,7 @@ document.documentElement.lang = 'en';
   } catch {}
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-16k'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-16l'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -474,7 +475,7 @@ document.documentElement.lang = 'en';
 
   function select(ph) { if (selected !== ph) zoom = null; selected = ph; if (ph && posOf(ph)) $('trimPos').value = posOf(ph); renderTrim(); render(); draw(); }
 
-  // ---------- overlap between neighbouring shots of one side (A1-A2, A2-A3, B1-B2, B2-B3) ----------
+  // ---------- overlap between neighbouring shots of one side (A1-A2, A2-A3, A3-A4, and the same on B) ----------
   const THUMB_W = 640;
   function thumbOf(bmp) {
     const w = THUMB_W, h = Math.round(bmp.height * w / bmp.width);
@@ -809,7 +810,7 @@ document.documentElement.lang = 'en';
   // Shot b's counted part starts where shot a's ends, so b sits at a's offset + a.x1 - b.x0 (with a matched overlap
   // that is exactly the shift s), and dy from the match lines them up vertically.
   function sideShots(pod, side) {
-    return [1, 2, 3].map(n => photos.find(p => p.pod === pod && p.shot === side + n && p.bmp && p.status === 'done')).filter(Boolean);
+    return Array.from({ length: MARKS }, (_, i) => i + 1).map(n => photos.find(p => p.pod === pod && p.shot === side + n && p.bmp && p.status === 'done')).filter(Boolean);
   }
   function stitchLayout(shots) {
     let ox = 0, oy = 0;
@@ -929,7 +930,7 @@ document.documentElement.lang = 'en';
     $('podN').textContent = podTotal(ph.pod); $('podUnit').textContent = `eggs on ${ph.pod}`;
     const [a, b] = areaPct(ph);
     $('countMeta').textContent = ph.status !== 'done' ? ph.status + '…' :
-      `${ph.example ? 'Example photo · ' : ''}Shot ${ph.shot || '–'}, ${shots.length} of 6 shots of this pod in.` +
+      `${ph.example ? 'Example photo · ' : ''}Shot ${ph.shot || '–'}, ${shots.length} of ${SHOTS.length} shots of this pod in.` +
       `${a > 0 || b < 100 ? ` Counting ${a}–${b}% of the width.` : ''} Egg size ${ph.eggD} px, found in ${ph.ms} ms.` +
       // many spots thrown out as too big: the eggs are larger than the egg size (on Pod 6, 2 px dropped 503 eggs)
       ((ph.dropped || []).length > 0.3 * Math.max(1, (ph.points || []).length) ? ` ⚠ ${ph.dropped.length} spots were too big for a ${ph.eggD} px egg: the egg size is probably too small (press Auto egg size).` : '');
@@ -1207,12 +1208,14 @@ document.documentElement.lang = 'en';
   // live focus meter
   setInterval(() => { if (stream && $('video').videoWidth && !sweeping && !capturing) $('focusMeta').textContent = `Sharpness now: ${liveSharpness().toFixed(1)} (higher is sharper)`; else if (!stream) $('focusMeta').textContent = ''; }, 800);
 
-  const renderCaptureBtn = () => { const s = nextShot(podId); $('captureBtn').textContent = s ? `Capture ${podId} · ${s}` : `Capture (${podId} has 6 shots)`; };
+  const renderCaptureBtn = () => { const s = nextShot(podId); $('captureBtn').textContent = s ? `Capture ${podId} · ${s}` : `Capture (${podId} has ${SHOTS.length} shots)`; };
   $('cameraBtn').onclick = () => startCamera();
   $('camSelect').onchange = () => startCamera($('camSelect').value);
   $('stopCamBtn').onclick = stopCamera;
   // ---------- focus stack (the Orius page's: per-region sharpest focus, shots across that range, merged in worker.js) ----------
-  const STACK = { grid: 3, coarse: 32, reach: 192, fine: 8, margin: 16, step: 12, maxShots: 16, sweepSettle: 350, settle: 700, drain: 3 };
+  // step 20: on the rail rig one shot is sharp over about +-25 focus units, so 20 apart leaves no gap; settle 450 ms:
+  // the frames moved only ~4 px between shots at 700 ms
+  const STACK = { grid: 3, coarse: 24, wide: 48, near: 120, fine: 10, margin: 16, step: 20, maxShots: 10, sweepSettle: 300, settle: 450, drain: 2 };
   let stackShots = null, stackWorker = null, stackSeq = 0;
   const stackPending = new Map(), sleep = ms => new Promise(r => setTimeout(r, ms));
   function stackCall(msg) {
@@ -1268,11 +1271,23 @@ document.documentElement.lang = 'en';
       regionSharpness(video, video.videoWidth, video.videoHeight).forEach((x, i) => { if (x < worst[i]) worst[i] = x; if (x > best[i]) { best[i] = x; at[i] = v; } });
       $('focus').value = v; $('focusOut').textContent = v;
     };
-    // the whole focus range: the sharp range can be far from the current focus (the pod rig: in focus at 450-640 with
-    // the lens left at 144)
-    for (let v = h.min; v <= h.max && stream; v += STACK.coarse) { $('captureBtn').textContent = `Finding each region's focus… ${v}`; await measure(v); }
+    // First near the last range found on this rig (pods sit at about the same height): +-STACK.near around it. Only if
+    // the sharp regions are not inside that window, or there is no last range, the whole focus range is swept (coarser).
+    let last = null;
+    try { last = JSON.parse(localStorage.getItem('eggStackRange')); } catch {}
+    const sweep = async (lo, hi, step) => { for (let v = lo; v <= hi && stream; v += step) { $('captureBtn').textContent = `Finding each region's focus… ${v}`; await measure(v); } };
+    const usefulOf = () => at.map((_, i) => best[i] > 1.3 * worst[i]);
+    let lo = h.min, hi = h.max;
+    if (last && last.lo != null) {
+      lo = Math.max(h.min, last.lo - STACK.near); hi = Math.min(h.max, last.hi + STACK.near);
+      await sweep(lo, hi, STACK.coarse);
+      const u = usefulOf(), edge = at.some((v, i) => u[i] && ((v - lo < STACK.coarse && lo > h.min) || (hi - v < STACK.coarse && hi < h.max)));
+      if (!u.some(Boolean) || edge) { // not found in the window: the whole range after all
+        best.fill(-1); worst.fill(Infinity); lo = h.min; hi = h.max; await sweep(lo, hi, STACK.wide);
+      }
+    } else await sweep(lo, hi, STACK.wide);
     // regions whose sharpness hardly changes (plain card, background) say nothing about the focus: left out
-    const useful = at.map((_, i) => best[i] > 1.3 * worst[i]); if (!useful.some(Boolean)) useful.fill(true);
+    const useful = usefulOf(); if (!useful.some(Boolean)) useful.fill(true);
     const atU = at.filter((_, i) => useful[i]);
     const flo = Math.max(h.min, Math.min(...atU) - STACK.margin), fhi = Math.min(h.max, Math.max(...atU) + STACK.margin);
     best.fill(-1);
@@ -1287,6 +1302,7 @@ document.documentElement.lang = 'en';
     try {
       const peaks = await regionPeaks(h, centre);
       stackShots = rangePositions(peaks);
+      try { localStorage.setItem('eggStackRange', JSON.stringify({ lo: stackShots[0], hi: stackShots[stackShots.length - 1] })); } catch {}
       const mid = stackShots[stackShots.length >> 1];
       await helper(`?value=${mid}`); $('focus').value = mid; $('focusOut').textContent = mid;
       $('focusNote').textContent = `Sharpest focus per region (top row first): ${peaks.join(', ')}. ` +
@@ -1343,7 +1359,7 @@ document.documentElement.lang = 'en';
     renderCaptureBtn(); renderShots();
   };
   $('podId').addEventListener('input', renderCaptureBtn);
-  $('newPodBtn').addEventListener('click', () => { stackShots = null; renderCaptureBtn(); });
+  $('newPodBtn').addEventListener('click', renderCaptureBtn);
   $('flipBtn').onclick = () => { if (flipped.has(podId)) flipped.delete(podId); else flipped.add(podId); renderShots(); renderCaptureBtn(); };
 
   // ---------- saving ----------
