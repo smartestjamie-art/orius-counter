@@ -356,7 +356,7 @@ document.documentElement.lang = 'en';
   } catch {}
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-16l'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-16m'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -504,11 +504,17 @@ document.documentElement.lang = 'en';
       matches.set(key, 'pending');
       // With a known shift for this pair of marks (set by hand, or remembered) the search stays within 6 % of it: the
       // pod's surface looks alike at several shifts, so a free search can pick the wrong one.
-      call({ type: 'match', a: a.thumb.g.slice().buffer, b: b.thumb.g.slice().buffer, ma: a.thumb.m.slice().buffer, mb: b.thumb.m.slice().buffer, width: a.thumb.w, height: a.thumb.h, near: near ?? undefined })
+      const msg = { type: 'match', a: a.thumb.g.slice().buffer, b: b.thumb.g.slice().buffer, ma: a.thumb.m.slice().buffer, mb: b.thumb.m.slice().buffer, width: a.thumb.w, height: a.thumb.h };
+      // a clear peak: decent correlation, well above the best other shift in the search
+      const clear = (r, nearby) => r.score > (nearby ? 0.2 : 0.25) && (r.coarse ?? r.score) - Math.max(0, r.second) > 0.08;
+      call({ ...msg, near: near ?? undefined })
+        // nothing clear near the known shift (the rig was changed, or the remembered value is wrong): search freely
+        .then(r => near != null && !clear(r, true)
+          ? call({ ...msg, a: a.thumb.g.slice().buffer, b: b.thumb.g.slice().buffer, ma: a.thumb.m.slice().buffer, mb: b.thumb.m.slice().buffer })
+              .then(f => clear(f, false) ? { ...f, free: true } : r)
+          : r)
         .then(r => {
-          const k = a.origW / a.thumb.w;
-          // a clear peak: decent correlation, well above the best other shift in the search
-          const ok = r.score > (near != null ? 0.2 : 0.25) && (r.coarse ?? r.score) - Math.max(0, r.second) > 0.08;
+          const k = a.origW / a.thumb.w, ok = clear(r, near != null && !r.free);
           matches.set(key, { s: r.s * k, dy: r.dy * k, score: r.score, second: r.second, ok, near });
           if (ok && !a.example) learn(a, key, r.s / a.thumb.w);
         })
