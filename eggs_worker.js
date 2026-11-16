@@ -4,7 +4,7 @@
 //    from the edge so the bright card next to the pod does not count.
 // 2. Egg caps: pixels brighter AND bluer than their surroundings (green tissue has little blue, a white cap has
 //    plenty), grouped into blobs; keep round blobs of egg size, drop long white slivers (hairs, fibres).
-const VERSION = 'eggs-1';
+const VERSION = 'eggs-2';
 
 self.onmessage = e => {
   const m = e.data;
@@ -20,11 +20,15 @@ function count({ rgb, width: W, height: H, de, contrast, edge }) {
   const px = new Uint8Array(rgb), N = W * H;
   const L = new Float32Array(N), B = new Float32Array(N);
   let pod = new Uint8Array(N);
+  const neutral = new Uint8Array(N);
   for (let i = 0, j = 0; i < N; i++, j += 3) {
     const r = px[j], g = px[j + 1], b = px[j + 2];
     const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
     L[i] = 0.299 * r + 0.587 * g + 0.114 * b; B[i] = b;
-    pod[i] = (mx - mn) / (mx + 1) > 0.22 && g > b + 15 ? 1 : 0;
+    // pod: saturated green, or pale green (the pod turns whitish where the fuzz catches the light, often where eggs are
+    // densest: on the rail rig, pale pod is about RGB 133,165,152 while the card is neutral, about 195,194,198)
+    pod[i] = ((mx - mn) / (mx + 1) > 0.22 && g > b + 15) || (g > r + 12 && g > b + 3 && L[i] > 50) ? 1 : 0;
+    neutral[i] = L[i] > 140 && Math.abs(g - r) < 10 && Math.abs(g - b) < 12 ? 1 : 0; // white card
   }
   const r1 = Math.max(1, Math.round(de * 0.6)), r2 = Math.max(2, Math.round(de * 2));
   pod = dilate(erode(pod, W, H, r1), W, H, r1);       // opening: drop specks on the card
@@ -32,21 +36,33 @@ function count({ rgb, width: W, height: H, de, contrast, edge }) {
   fillHoles(pod, W, H);
   keepLargest(pod, W, H);
   const area = pod.reduce((a, v) => a + v, 0);
-  pod = erode(pod, W, H, Math.max(1, Math.round(de * edge)));
+  // Counted zone: the pod and a margin past its edge (edge, in egg sizes), so eggs on the brown seam along the rim
+  // count too; the card itself stays out (large bright neutral areas: an opening keeps them and drops egg-sized
+  // specks), and so does the dark background.
+  const rc = Math.max(2, Math.round(de * 0.9));
+  const card = dilate(erode(neutral, W, H, rc), W, H, rc);
+  const zone = dilate(pod, W, H, Math.max(0, Math.round(de * edge)));
+  // and a margin at the picture's border (a stacked photo has a ragged edge where the frames were shifted)
+  const mg = Math.max(4, Math.round(de * 2));
+  for (let i = 0; i < N; i++) { const x = i % W, y = (i - x) / W; if (card[i] || L[i] < 45 || x < mg || y < mg || x >= W - mg || y >= H - mg) zone[i] = 0; }
+  pod = zone;
 
+  // local background from the zone only, so the bright card next to the rim does not raise it
   const win = Math.max(5, Math.round(de * 5)) | 1;
-  const bL = boxMean(L, W, H, win >> 1), bB = boxMean(B, W, H, win >> 1);
+  const zf = new Float32Array(N), zL = new Float32Array(N), zB = new Float32Array(N);
+  for (let i = 0; i < N; i++) if (zone[i]) { zf[i] = 1; zL[i] = L[i]; zB[i] = B[i]; }
+  const mZ = boxMean(zf, W, H, win >> 1), mL = boxMean(zL, W, H, win >> 1), mB = boxMean(zB, W, H, win >> 1);
   const cand = new Uint8Array(N), lift = new Float32Array(N);
   for (let i = 0; i < N; i++) {
-    if (!pod[i]) continue;
-    const a = L[i] - bL[i], b = B[i] - bB[i];
+    if (!zone[i] || mZ[i] < 0.2) continue;
+    const a = L[i] - mL[i] / mZ[i], b = B[i] - mB[i] / mZ[i];
     if (a > contrast && b > contrast) { cand[i] = 1; lift[i] = Math.min(a, b); }
   }
 
   // blobs, 8-connected
   const lab = new Int32Array(N), stack = [];
   const minA = Math.max(2, 0.25 * de * de), maxA = 4 * de * de, maxSide = 2.5 * de;
-  const points = [], dropped = [];
+  const points = [], dropped = [], big = [];
   let next = 0;
   for (let s = 0; s < N; s++) {
     if (!cand[s] || lab[s]) continue;
@@ -65,9 +81,22 @@ function count({ rgb, width: W, height: H, de, contrast, edge }) {
     }
     const cx = sx / n, cy = sy / n;
     if (n < minA) continue;                                           // noise
-    if (n > maxA || Math.max(x1 - x0, y1 - y0) + 1 > maxSide) dropped.push([cx, cy]); // too big or long: hair, fibre, glare
-    else points.push([cx, cy, Math.round(peak)]);
+    if (n > maxA || Math.max(x1 - x0, y1 - y0) + 1 > maxSide) big.push({ cx, cy, n, w: x1 - x0 + 1, h: y1 - y0 + 1, peak }); // decided below
+    else points.push([cx, cy, Math.round(peak), n]);
   }
+  // Too big for one egg: a compact blob is a clump of touching eggs (common along the seam and in dense patches) and
+  // counts as its area over a single egg's (the median of the single blobs); long thin or huge ones are hairs, fibres
+  // and glare, and are dropped.
+  const singles = points.map(p => p[3]).sort((a, b) => a - b), one = singles.length ? singles[singles.length >> 1] : de * de * 0.6;
+  for (const b of big) {
+    const fill = b.n / (b.w * b.h), long = Math.max(b.w, b.h) / Math.min(b.w, b.h), k = Math.round(b.n / one);
+    if (fill > 0.35 && long < 3 && k >= 1 && k <= 8) {
+      const r = Math.sqrt(b.n / Math.PI) * 0.5;
+      for (let i = 0; i < k; i++) { const t = 2 * Math.PI * i / k; points.push([b.cx + (k > 1 ? r * Math.cos(t) : 0), b.cy + (k > 1 ? r * Math.sin(t) : 0), Math.round(b.peak), 0]); }
+    } else dropped.push([b.cx, b.cy]);
+  }
+  if (self.EGG_DEBUG) self.EGG_DEBUG.info = { one, singles: singles.length, big: big.length, ks: big.map(b => Math.round(b.n / one)) };
+  for (const p of points) p.length = 3;
 
   // pod outline, every few pixels, for drawing
   const outline = [];

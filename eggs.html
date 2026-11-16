@@ -284,7 +284,7 @@
           <input type="range" id="contrast" min="6" max="50" step="1">
         </div>
         <div class="slider">
-          <label for="edge">Ignore the pod edge (egg sizes)</label><output id="edgeOut"></output>
+          <label for="edge">Count past the pod edge (egg sizes)</label><output id="edgeOut"></output>
           <input type="range" id="edge" min="0" max="4" step="0.25">
         </div>
         <div class="row"><button class="small" id="autoSizeBtn">Auto egg size</button><button class="small" id="defaultsBtn">Defaults</button></div>
@@ -355,7 +355,8 @@ document.documentElement.lang = 'en';
   } catch {}
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-16h'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-16j';
+  const EGG_COUNTER = 'eggs-2'; // the worker's VERSION: photos counted with an older one are recounted // bump with every change to a worker, so a browser never keeps an old copy
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
   worker.onmessage = e => { const p = pending.get(e.data.seq); if (p) { pending.delete(e.data.seq); e.data.error ? p.reject(new Error(e.data.error)) : p.resolve(e.data); } };
@@ -426,7 +427,7 @@ document.documentElement.lang = 'en';
         ph.thumb = thumbOf(ph.bmp);
         if (selected === ph) draw();
         queueMicrotask(updateMatches);
-        if (stored && stored.eggD === eggPxFor(ph) && stored.contrast === settings.contrast && stored.edge === settings.edge) ph.status = 'done';
+        if (stored && stored.version === EGG_COUNTER && stored.eggD === eggPxFor(ph) && stored.contrast === settings.contrast && stored.edge === settings.edge) ph.status = 'done';
         else await countPhoto(ph);
       } catch (err) { ph.status = 'error: ' + err.message; }
       setBusy(''); render(); if (selected === ph) draw();
@@ -456,7 +457,7 @@ document.documentElement.lang = 'en';
       for (const ph of [selected, ...photos.filter(p => p !== selected)]) {
         if (!ph || !ph.bmp) continue;
         enqueue(async () => {
-          if (ph.eggD === eggPxFor(ph) && ph.contrast === settings.contrast && ph.edge === settings.edge) return;
+          if (ph.version === EGG_COUNTER && ph.eggD === eggPxFor(ph) && ph.contrast === settings.contrast && ph.edge === settings.edge) return;
           try { await countPhoto(ph); } catch (err) { ph.status = 'error: ' + err.message; }
           setBusy(''); render(); if (selected === ph) draw();
         });
