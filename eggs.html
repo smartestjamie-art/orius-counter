@@ -299,6 +299,7 @@
           <button id="saveImg">Marked photo (JPG)</button>
           <button id="saveCsv">Pods (CSV)</button>
           <button id="saveShotsCsv">Shots (CSV)</button>
+          <button id="savePodPhotos">Original photos of this pod</button>
         </div>
         <p class="note">Photos are kept in this browser, so a refresh does not lose them.</p>
         <p class="note" id="saveNote"></p>
@@ -1285,6 +1286,13 @@ document.documentElement.lang = 'en';
   const csvCell = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
   const csv = rows => new Blob([rows.map(r => r.map(csvCell).join(',')).join('\n') + '\n'], { type: 'text/csv' });
   const real = () => photos.filter(p => !p.example);
+  // the pod's shots as they were taken (no dots), one file each
+  $('savePodPhotos').onclick = async () => {
+    const pod = selected && !selected.example ? selected.pod : podId, list = photos.filter(p => p.pod === pod && !p.example);
+    if (!list.length) { $('saveNote').textContent = `No photos of ${pod} to save.`; return; }
+    for (const p of list) { download(p.blob, p.name); await new Promise(r => setTimeout(r, 400)); }
+    $('saveNote').textContent = `Saved ${list.length} original photo${list.length > 1 ? 's' : ''} of ${pod}. If Chrome asks to download several files, choose Allow.`;
+  };
   $('saveImg').onclick = async () => {
     const ph = selected; if (!ph || !ph.bmp) return;
     const c = document.createElement('canvas'); c.width = ph.origW; c.height = ph.origH;
