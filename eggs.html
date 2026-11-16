@@ -348,7 +348,8 @@ document.documentElement.lang = 'en';
   } catch {}
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const worker = new Worker('eggs_worker.js');
+  const BUILD = '2026-11-16b'; // bump with every change to a worker, so a browser never keeps an old copy
+  const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
   worker.onmessage = e => { const p = pending.get(e.data.seq); if (p) { pending.delete(e.data.seq); e.data.error ? p.reject(new Error(e.data.error)) : p.resolve(e.data); } };
   worker.onerror = e => setBusy('The counter failed to start: ' + (e.message || 'unknown error'));
@@ -1156,7 +1157,7 @@ document.documentElement.lang = 'en';
   const stackPending = new Map(), sleep = ms => new Promise(r => setTimeout(r, ms));
   function stackCall(msg) {
     if (!stackWorker) {
-      stackWorker = new Worker('worker.js');
+      stackWorker = new Worker('worker.js?v=' + BUILD);
       stackWorker.onmessage = e => {
         const m = e.data;
         if (m.progress) { $('captureBtn').textContent = m.progress; return; }

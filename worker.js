@@ -1,6 +1,7 @@
 /* Runs the counter off the page's main thread. Prepared photos stay cached by id, so
    changing thresholds only reruns detection. Every reply echoes the request's seq. */
-importScripts('debris_model.js', 'orius.js');
+// the page's version tag (?v=...) is passed on, so the counter scripts are never an old cached copy either
+importScripts('debris_model.js' + self.location.search, 'orius.js' + self.location.search);
 
 const cache = new Map();
 

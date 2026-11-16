@@ -336,7 +336,8 @@ document.documentElement.lang = 'en';
 (() => {
   const $ = id => document.getElementById(id);
   const REF_R = 699;
-  const worker = new Worker('worker.js');
+  const BUILD = '2026-11-16b'; // bump with every change to a worker, so a browser never keeps an old copy
+  const worker = new Worker('worker.js?v=' + BUILD);
   const pending = new Map();
   let seq = 0;
   worker.onmessage = e => { if (e.data.progress) { if (capturing) $('captureBtn').textContent = e.data.progress; return; } const p = pending.get(e.data.seq); if (p) { pending.delete(e.data.seq); e.data.error ? p.reject(new Error(e.data.error)) : p.resolve(e.data); } };
