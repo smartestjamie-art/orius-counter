@@ -336,7 +336,7 @@ document.documentElement.lang = 'en';
 (() => {
   const $ = id => document.getElementById(id);
   const REF_R = 699;
-  const BUILD = '2026-11-16f'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-16g'; // bump with every change to a worker, so a browser never keeps an old copy
   const worker = new Worker('worker.js?v=' + BUILD);
   const pending = new Map();
   let seq = 0;
@@ -1229,7 +1229,7 @@ document.documentElement.lang = 'en';
   if (!framed && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) $('cameraBtn').hidden = false;
 
   async function startCamera(deviceId) {
-    stopCamera();
+    stopCamera(); stackShots = null;
     // Chrome sometimes asks quietly (a small camera icon in the address bar), so say where to look while waiting.
     const btn = $('cameraBtn'), hint = $('stageHint'), oldHint = hint.textContent;
     btn.disabled = true; btn.textContent = 'Starting camera…';
@@ -1611,6 +1611,7 @@ document.documentElement.lang = 'en';
     $('focusOut').textContent = h.auto ? 'auto' : h.value; $('focusRow').hidden = $('focusBtns').hidden = $('stackRow').hidden = false;
     try { $('stackToggle').checked = localStorage.getItem('oriusStack') === '1'; } catch {}
     f.oninput = () => {
+      stackShots = null; // the stack range was found around another focus
       $('focusOut').textContent = f.value;
       clearTimeout(f.t); f.t = setTimeout(() => helper(`?value=${f.value}`), 60);
     };
@@ -1663,7 +1664,7 @@ document.documentElement.lang = 'en';
   // Step through the focus range and keep the setting whose weakest band (left, centre, right) is sharpest:
   // coarse steps of 32, then steps of 4 around the best.
   let sweeping = false;
-  $('focusSweepBtn').onclick = async () => {
+  $('focusSweepBtn').onclick = async () => { stackShots = null;
     if (sweeping || !stream) return;
     sweeping = true; $('focusSweepBtn').disabled = true;
     const f = $('focus'), lo = +f.min, hi = +f.max;
@@ -1685,7 +1686,7 @@ document.documentElement.lang = 'en';
     $('focusNote').textContent = `Focus set to ${best} (sharpness ${bestScore.toFixed(1)}). It stays there until you press Autofocus.`;
     $('focusSweepBtn').disabled = false; sweeping = false;
   };
-  $('focusAutoBtn').onclick = async () => {
+  $('focusAutoBtn').onclick = async () => { stackShots = null;
     const h = await helper('?auto=1');
     if (h) { $('focusOut').textContent = 'auto'; $('focusNote').textContent = 'Autofocus is on.'; }
   };

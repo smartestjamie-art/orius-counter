@@ -355,7 +355,7 @@ document.documentElement.lang = 'en';
   } catch {}
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-16f'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-16g'; // bump with every change to a worker, so a browser never keeps an old copy
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
   worker.onmessage = e => { const p = pending.get(e.data.seq); if (p) { pending.delete(e.data.seq); e.data.error ? p.reject(new Error(e.data.error)) : p.resolve(e.data); } };
@@ -1105,6 +1105,7 @@ document.documentElement.lang = 'en';
     sel.value = stream.getVideoTracks()[0].getSettings().deviceId || '';
     $('streamMeta').textContent = `${video.videoWidth} × ${video.videoHeight}`;
     renderCaptureBtn(); renderFix(); draw();
+    stackShots = null; // a new session: find the range again
     setupFocus(stream.getVideoTracks()[0]);
   }
   function stopCamera() {
@@ -1156,7 +1157,9 @@ document.documentElement.lang = 'en';
     }
     const f = $('focus'); f.min = h.min; f.max = h.max; f.step = 1; f.value = h.value;
     $('focusOut').textContent = h.auto ? 'auto' : h.value;
-    f.oninput = () => { $('focusOut').textContent = f.value; clearTimeout(f.t); f.t = setTimeout(() => helper(`?value=${f.value}`), 60); };
+    f.oninput = () => {
+      stackShots = null; // the stack range was found around another focus
+      $('focusOut').textContent = f.value; clearTimeout(f.t); f.t = setTimeout(() => helper(`?value=${f.value}`), 60); };
     $('focusConnect').hidden = true; $('focusNote').textContent = 'Drag Focus, or press Find sharpest focus. Zoom into the pod (click the preview) to judge it.';
     return true;
   }
@@ -1164,7 +1167,7 @@ document.documentElement.lang = 'en';
     $('focusNote').textContent = 'Connecting…';
     if (!await connectHelper() && isMac && !await helper()) $('focusNote').textContent = 'Could not reach the focus helper. Is its window open? In Chrome, click the icon at the left of the address bar, open Site settings and set “Local network access” (or “Apps on device”) to Allow, then try again.';
   };
-  $('focusAutoBtn').onclick = async () => { const h = await helper('?auto=1'); if (h) { $('focusOut').textContent = 'auto'; $('focusNote').textContent = 'Autofocus is on.'; } };
+  $('focusAutoBtn').onclick = async () => { stackShots = null; const h = await helper('?auto=1'); if (h) { $('focusOut').textContent = 'auto'; $('focusNote').textContent = 'Autofocus is on.'; } };
   // Sharpness of the pod: mean |Laplacian| of the luma over the middle of the frame (what the camera sees, not zoomed).
   function liveSharpness(src) {
     const v = src || $('video'), W0 = src ? src.width : v.videoWidth, H0 = src ? src.height : v.videoHeight;
@@ -1179,7 +1182,7 @@ document.documentElement.lang = 'en';
     return sum / n;
   }
   let sweeping = false;
-  $('focusSweepBtn').onclick = async () => {
+  $('focusSweepBtn').onclick = async () => { stackShots = null;
     if (sweeping || !stream || !focusConnected) return;
     sweeping = true; $('focusSweepBtn').disabled = true;
     const f = $('focus'), lo = +f.min, hi = +f.max;
@@ -1303,7 +1306,7 @@ document.documentElement.lang = 'en';
     await helper(`?value=${centre}`); $('focus').value = centre; $('focusOut').textContent = centre;
     const r = await stackCall({ type: 'stackEnd', ref: frames.length >> 1 });
     const moved = Math.max(0, ...(r.shifts || []).map(a => Math.hypot(a.dx, a.dy)));
-    $('focusNote').textContent = `Stacked ${r.frames} shots (focus ${shots[0]}–${shots[shots.length - 1]}), lined up (they had moved up to ${Math.round(moved)} px). ${Math.round(r.detail * 100)}% of the picture has detail.` +
+    $('focusNote').textContent = `Stacked ${r.frames} shots (focus ${shots[0]}–${shots[shots.length - 1]}; this range is kept for the next shots until you change the focus — press Find stack range if the pod sits higher or lower), lined up (they had moved up to ${Math.round(moved)} px). ${Math.round(r.detail * 100)}% of the picture has detail.` +
       (moved > 60 ? ' The camera or tray moves a lot while stacking: wait a moment after placing the tray, and check nothing touches the stand.' : '');
     const c = document.createElement('canvas'); c.width = r.width; c.height = r.height;
     c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(r.rgba), r.width, r.height), 0, 0);
@@ -1331,7 +1334,7 @@ document.documentElement.lang = 'en';
     renderCaptureBtn(); renderShots();
   };
   $('podId').addEventListener('input', renderCaptureBtn);
-  $('newPodBtn').addEventListener('click', renderCaptureBtn);
+  $('newPodBtn').addEventListener('click', () => { stackShots = null; renderCaptureBtn(); });
   $('flipBtn').onclick = () => { if (flipped.has(podId)) flipped.delete(podId); else flipped.add(podId); renderShots(); renderCaptureBtn(); };
 
   // ---------- saving ----------
