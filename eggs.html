@@ -59,20 +59,24 @@
   .key i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 1px solid #000; margin-right: 5px; vertical-align: 0; }
   .key span:last-child i { border: 2px solid; width: 8px; height: 8px; }
   /* The photo takes the room left by the side panels; from 1600 px the panels form two columns. */
-  .grid { display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 24vw, 400px); grid-template-rows: auto 1fr;
+  /* The photo takes the room left by one column of side panels. That column stays in view and scrolls by itself, so
+     the photo never leaves the screen while its controls are used. Below 860 px everything stacks. */
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 26vw, 400px); grid-template-rows: auto 1fr;
     grid-template-areas: "photo side" "list side"; gap: 16px; align-items: start; }
   .photo-area { grid-area: photo; min-width: 0; }
-  .grid > aside { grid-area: side; }
+  .grid > aside { grid-area: side; position: sticky; top: 12px; max-height: calc(100dvh - 24px); overflow-y: auto;
+    overscroll-behavior: contain; scrollbar-width: thin; padding-right: 2px; }
   .photos-panel { grid-area: list; }
-  @media (max-width: 1000px) { .grid { grid-template-columns: minmax(0, 1fr) 260px; } }
-  @media (min-width: 1600px) {
-    .grid { grid-template-columns: minmax(0, 1fr) clamp(620px, 36vw, 820px); }
-    .grid > aside { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
-    .grid > aside > .panel:first-child { grid-column: 1 / -1; }
-  }
-  @media (max-width: 700px) {
+  @media (max-width: 860px) {
     .grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; grid-template-areas: "photo" "side" "list"; }
+    .grid > aside { position: static; max-height: none; overflow: visible; }
   }
+  /* Side panels fold: click a heading. */
+  aside .panel > h2 { cursor: pointer; display: flex; align-items: center; justify-content: space-between; user-select: none; }
+  aside .panel > h2::after { content: "–"; font: 600 15px/1 var(--font-mono); color: var(--muted); }
+  aside .panel.shut > h2 { margin-bottom: 0; }
+  aside .panel.shut > h2::after { content: "+"; }
+  aside .panel.shut > :not(h2) { display: none !important; }
 
   /* As wide as the column allows, but never taller than the window. */
   .stage { position: relative; background: var(--stage); border-radius: 10px; overflow: hidden; aspect-ratio: 4 / 3;
@@ -119,8 +123,9 @@
   td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
   tr.sel td { background: var(--accent-soft); }
   tbody tr { cursor: pointer; }
-  td.num { font: 600 15px var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
-  td.name { overflow-wrap: anywhere; }
+  td.num { font: 600 15px var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  td.name { overflow-wrap: anywhere; min-width: 150px; }
+  .photos-panel table { min-width: 520px; }
   .status { font-size: 13px; color: var(--muted); }
   .pill { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px; font-weight: 600;
     background: var(--accent-soft); color: var(--accent); }
@@ -916,6 +921,27 @@ document.documentElement.lang = 'en';
     if (rows.length < 2) { $('saveNote').textContent = 'No pod photos yet (the example is not saved).'; return; }
     download(csv(rows), `orius_eggs_shots_${new Date().toISOString().slice(0, 10)}.csv`);
   };
+
+  // ---------- side panels fold on a click on their heading (remembered) ----------
+  {
+    let shut = null;
+    try { shut = JSON.parse(localStorage.getItem('eggShut')); } catch {}
+    if (!Array.isArray(shut)) shut = ['Detection', 'Show']; // rarely needed, folded until asked for
+    for (const h of document.querySelectorAll('aside .panel > h2')) {
+      const panel = h.parentElement, name = h.textContent.trim();
+      panel.classList.toggle('shut', shut.includes(name));
+      h.tabIndex = 0; h.setAttribute('role', 'button'); h.setAttribute('aria-expanded', !panel.classList.contains('shut'));
+      const flip = () => {
+        const now = panel.classList.toggle('shut');
+        h.setAttribute('aria-expanded', !now);
+        shut = now ? [...new Set([...shut, name])] : shut.filter(n => n !== name);
+        try { localStorage.setItem('eggShut', JSON.stringify(shut)); } catch {}
+        if (!now) drawMag();
+      };
+      h.onclick = flip;
+      h.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flip(); } };
+    }
+  }
 
   // ---------- start: photos from earlier visits, or the example ----------
   renderTrim(); renderSettings(); render(); draw();
