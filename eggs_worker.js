@@ -93,7 +93,8 @@ function count({ rgb, width: W, height: H, de, contrast, edge }) {
 // tray slides, so they would pull the match towards no shift at all.
 function match({ a, b, ma, mb, width: W, height: H }) {
   const A = texture(new Float32Array(a), W, H), B = texture(new Float32Array(b), W, H);
-  const f = 4, w = Math.floor(W / f), h = Math.floor(H / f);
+  // half-size search: at quarter size the pod's fine surface texture is gone and the match lands on the wrong shift
+  const f = +(self.MATCH_F || 2), w = Math.floor(W / f), h = Math.floor(H / f);
   const As = shrink(A, W, H, f), Bs = shrink(B, W, H, f);
   let MA = null, MB = null, MAs = null, MBs = null;
   if (ma && mb) {
@@ -101,10 +102,13 @@ function match({ a, b, ma, mb, width: W, height: H }) {
     MAs = shrinkMask(MA, W, H, f); MBs = shrinkMask(MB, W, H, f);
     // too little pod in either shot: match the whole picture as before
     const share = v => v.reduce((t, x) => t + x, 0) / v.length;
-    if (share(MAs) < 0.03 || share(MBs) < 0.03) MA = MB = MAs = MBs = null;
+    if (share(MAs) < 0.01 || share(MBs) < 0.01) MA = MB = MAs = MBs = null;
   }
-  const ncc = (P, Q, ww, hh, s, dy) => MAs ? nccMasked(P, Q, ww === W ? MA : MAs, ww === W ? MB : MBs, ww, hh, s, dy) : nccPlain(P, Q, ww, hh, s, dy);
-  const minOv = Math.round(w * 0.06), maxDy = Math.round(h * 0.08);
+  // shared pod needed: an eighth of the smaller shot's pod (a thin pod and a narrow overlap still qualify)
+  const podN = v => v ? v.reduce((t, x) => t + x, 0) : 0;
+  const needFull = MA ? Math.max(50, 0.125 * Math.min(podN(MA), podN(MB))) : 0, needSmall = MAs ? Math.max(30, 0.125 * Math.min(podN(MAs), podN(MBs))) : 0;
+  const ncc = (P, Q, ww, hh, s, dy) => MAs ? nccMasked(P, Q, ww === W ? MA : MAs, ww === W ? MB : MBs, ww, hh, s, dy, ww === W ? needFull : needSmall) : nccPlain(P, Q, ww, hh, s, dy);
+  const minOv = Math.round(w * 0.06), maxDy = Math.round(h * 0.05); // the tray slides along the rail: little vertical shift
   let best = { score: -2 }, scores = [];
   for (let s = -(w - minOv); s <= w - minOv; s++) {
     let top = -2, topDy = 0;
@@ -112,7 +116,9 @@ function match({ a, b, ma, mb, width: W, height: H }) {
     scores.push([s, top]);
     if (top > best.score) best = { score: top, s, dy: topDy };
   }
-  const second = Math.max(-1, ...scores.filter(([s]) => Math.abs(s - best.s) > 3).map(([, c]) => c));
+  // the best score away from the peak (its shoulders are broad: pod texture changes slowly), for the clarity test
+  const away = Math.max(3, Math.round(w * 0.05));
+  const second = Math.max(-1, ...scores.filter(([s]) => Math.abs(s - best.s) > away).map(([, c]) => c));
   let fine = { score: -2 };
   for (let s = best.s * f - f - 1; s <= best.s * f + f + 1; s++)
     for (let dy = best.dy * f - f - 1; dy <= best.dy * f + f + 1; dy++) {
@@ -151,7 +157,7 @@ function shrinkMask(m, W, H, f) {
   return out;
 }
 // as nccPlain, over pixels that are pod in both shots; needs a fair amount of shared pod
-function nccMasked(A, B, MA, MB, W, H, s, dy) {
+function nccMasked(A, B, MA, MB, W, H, s, dy, need) {
   const x0 = Math.max(0, -s), x1 = Math.min(W, W - s), y0 = Math.max(0, -dy), y1 = Math.min(H, H - dy);
   let n = 0, sa = 0, sb = 0, sab = 0, saa = 0, sbb = 0;
   for (let y = y0; y < y1; y++) {
@@ -161,7 +167,7 @@ function nccMasked(A, B, MA, MB, W, H, s, dy) {
       const p = A[ra + x], q = B[rb + x]; sa += p; sb += q; sab += p * q; saa += p * p; sbb += q * q; n++;
     }
   }
-  if (n < Math.max(50, 0.02 * W * H)) return -2;
+  if (n < need) return -2;
   const cov = sab - sa * sb / n, va = saa - sa * sa / n, vb = sbb - sb * sb / n;
   return va > 0 && vb > 0 ? cov / Math.sqrt(va * vb) : -2;
 }

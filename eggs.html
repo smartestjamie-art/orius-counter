@@ -494,7 +494,7 @@ document.documentElement.lang = 'en';
         .then(r => {
           const k = a.origW / a.thumb.w;
           // a clear peak: decent correlation, well above the best other shift
-          const ok = r.score > 0.25 && r.score - Math.max(0, r.second) > 0.08;
+          const ok = r.score > 0.25 && (r.coarse ?? r.score) - Math.max(0, r.second) > 0.08; // clear peak in the search
           matches.set(key, { s: r.s * k, dy: r.dy * k, score: r.score, second: r.second, ok });
           if (ok && !a.example) learn(a, key, r.s / a.thumb.w);
         })
