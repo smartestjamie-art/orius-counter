@@ -4,7 +4,7 @@
 //    from the edge so the bright card next to the pod does not count.
 // 2. Egg caps: pixels brighter AND bluer than their surroundings (green tissue has little blue, a white cap has
 //    plenty), grouped into blobs; keep round blobs of egg size, drop long white slivers (hairs, fibres).
-const VERSION = 'eggs-3';
+const VERSION = 'eggs-3'; // counting; overlap matching changed separately (no recount needed)
 
 self.onmessage = e => {
   const m = e.data;
@@ -112,7 +112,57 @@ function count({ rgb, width: W, height: H, de, contrast, edge }) {
 // score: normalised correlation at the best shift; second: best score at a clearly different shift.
 // Only the pod is matched (ma, mb: green-pod masks): the camera, rail, background and lighting stay put while the
 // tray slides, so they would pull the match towards no shift at all.
-function match({ a, b, ma, mb, width: W, height: H, near }) {
+// With pod masks: candidates from the pod's outline (its wavy edges and ends: the pod moves 9-14 % up or down between
+// marks on the rail rig, and plain texture also matches things that stay put), each confirmed by the pod's surface
+// texture; score = texture x shape. Without masks, the texture search below.
+function match(m) {
+  if (m.ma && m.mb && !self.MATCH_OLD) { const r = matchShape(m); if (r) return r; }
+  return matchTexture(m);
+}
+function matchShape({ a, b, ma, mb, width: W, height: H, near }) {
+  const A = texture(new Float32Array(a), W, H), B = texture(new Float32Array(b), W, H);
+  const rawA = new Uint8Array(ma), rawB = new Uint8Array(mb);
+  const MA = podMask(rawA, W, H), MB = podMask(rawB, W, H);
+  const shapeOf = raw => { const o = dilate(erode(raw, W, H, 2), W, H, 2), f = new Float32Array(W * H); for (let i = 0; i < f.length; i++) f[i] = o[i]; return boxMean(f, W, H, 4); };
+  const q = 4, wq = Math.floor(W / q), hq = Math.floor(H / q), SA = shrink(shapeOf(rawA), W, H, q), SB = shrink(shapeOf(rawB), W, H, q);
+  const podN = v => v.reduce((t, x) => t + x, 0);
+  if (podN(MA) < 0.01 * W * H || podN(MB) < 0.01 * W * H) return null;
+  // overlaps on the rigs are 14-76 % of the width; slivers under 12 % match noise, so they are not considered
+  const minOv = Math.round(wq * 0.12), sAway = Math.round(wq * 0.08), maxDy = Math.round(hq * (self.MATCH_DY || 0.2));
+  // the tray moves the same way between every pair of marks (each shot shows the pod further along): positive shifts only
+  const sLo = near != null ? Math.round((near - 0.06) * wq) : sAway, sHi = near != null ? Math.round((near + 0.06) * wq) : wq - minOv;
+  // 1. every shift (2 px steps at half size; the tray always moves, so none near zero: that is dust and shading): the
+  // outline at quarter size first, and where it agrees at all, the surface texture at half size
+  const h2 = 2, w2 = Math.floor(W / h2), hh2 = Math.floor(H / h2), A2 = shrink(A, W, H, h2), B2 = shrink(B, W, H, h2), MA2 = shrinkMask(MA, W, H, h2), MB2 = shrinkMask(MB, W, H, h2);
+  // shared pod needed: a sixteenth of the smaller shot's pod (overlaps on the rig can be as narrow as 14 %)
+  const need = Math.max(30, 0.0625 * Math.min(podN(MA2), podN(MB2)));
+  const scored = [];
+  for (let s = Math.max(sLo, -(wq - minOv)); s <= Math.min(sHi, wq - minOv); s++) {
+    if (Math.abs(s) < sAway) continue;
+    for (let dy = -maxDy; dy <= maxDy; dy++) {
+      const c = nccPlain(SA, SB, wq, hq, s, dy); if (c < 0.3) continue;
+      const t = nccMasked(A2, B2, MA2, MB2, w2, hh2, 2 * s, 2 * dy, need); if (t <= 0) continue;
+      scored.push({ c, tex: t, s, dy, s2: 2 * s, dy2: 2 * dy, score: t * c });
+    }
+  }
+  if (!scored.length) return null;
+  scored.sort((u, v) => v.score - u.score);
+  // refine the best at half size, 1 px steps
+  let best = scored[0];
+  for (let s = best.s2 - 2; s <= best.s2 + 2; s++) for (let dy = best.dy2 - 2; dy <= best.dy2 + 2; dy++) {
+    const t = nccMasked(A2, B2, MA2, MB2, w2, hh2, s, dy, need), c = nccPlain(SA, SB, wq, hq, Math.round(s / 2), Math.round(dy / 2));
+    if (t * c > best.score) best = { ...best, tex: t, c, s2: s, dy2: dy, score: t * c };
+  }
+  const second = Math.max(0, ...scored.filter(c => Math.abs(c.s - best.s) > Math.round(wq * 0.05)).map(c => c.score));
+  // 3. fine position on the full thumbnail
+  const needF = Math.max(50, 0.0625 * Math.min(podN(MA), podN(MB)));
+  let fine = { v: -2, s: best.s2 * 2, dy: best.dy2 * 2 };
+  for (let s = best.s2 * 2 - 2; s <= best.s2 * 2 + 2; s++) for (let dy = best.dy2 * 2 - 2; dy <= best.dy2 * 2 + 2; dy++) {
+    const v = nccMasked(A, B, MA, MB, W, H, s, dy, needF); if (v > fine.v) fine = { v, s, dy };
+  }
+  return { s: fine.s, dy: fine.dy, score: best.score, second, coarse: best.score, tex: best.tex, shape: best.c, masked: true, combined: true };
+}
+function matchTexture({ a, b, ma, mb, width: W, height: H, near }) {
   const A = texture(new Float32Array(a), W, H), B = texture(new Float32Array(b), W, H);
   // half-size search: at quarter size the pod's fine surface texture is gone and the match lands on the wrong shift
   // (and coarser for big or tall thumbnails, so the search never takes more than a few seconds)
@@ -130,7 +180,7 @@ function match({ a, b, ma, mb, width: W, height: H, near }) {
   const podN = v => v ? v.reduce((t, x) => t + x, 0) : 0;
   const needFull = MA ? Math.max(50, 0.125 * Math.min(podN(MA), podN(MB))) : 0, needSmall = MAs ? Math.max(30, 0.125 * Math.min(podN(MAs), podN(MBs))) : 0;
   const ncc = (P, Q, ww, hh, s, dy) => MAs ? nccMasked(P, Q, ww === W ? MA : MAs, ww === W ? MB : MBs, ww, hh, s, dy, ww === W ? needFull : needSmall) : nccPlain(P, Q, ww, hh, s, dy);
-  const minOv = Math.round(w * 0.06), maxDy = Math.min(24, Math.round(h * 0.08)); // the tray slides along the rail, but A1-A2 on the real rig moved 6 % down
+  const minOv = Math.round(w * 0.06), maxDy = Math.round(h * (self.MATCH_DY || 0.08)); // the tray slides along the rail, but A1-A2 on the real rig moved 6 % down
   // near: the shift this pair of rail marks is known to have (fraction of the width): search only close to it
   const sLo = near != null ? Math.round((near - 0.06) * w) : -(w - minOv), sHi = near != null ? Math.round((near + 0.06) * w) : w - minOv;
   let best = { score: -2 }, scores = [];

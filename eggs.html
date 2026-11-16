@@ -356,7 +356,7 @@ document.documentElement.lang = 'en';
   } catch {}
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-16m'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-16n'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -499,14 +499,17 @@ document.documentElement.lang = 'en';
     for (const a of photos) {
       const b = neighbour(a, 1); if (!b || !a.thumb || !b.thumb) continue;
       const key = a.key + '|' + b.key, known = knownShift(a), near = known ? +known.frac.toFixed(4) : null;
-      const had = matches.get(key); if (had && (had === 'pending' || had.near === near)) continue;
+      const had = matches.get(key); if (had && (had === 'pending' || had.ok || had.near === near)) continue;
       if (a.thumb.w !== b.thumb.w || a.thumb.h !== b.thumb.h) { matches.set(key, { ok: false, why: 'different photo sizes', near }); continue; }
       matches.set(key, 'pending');
       // With a known shift for this pair of marks (set by hand, or remembered) the search stays within 6 % of it: the
       // pod's surface looks alike at several shifts, so a free search can pick the wrong one.
       const msg = { type: 'match', a: a.thumb.g.slice().buffer, b: b.thumb.g.slice().buffer, ma: a.thumb.m.slice().buffer, mb: b.thumb.m.slice().buffer, width: a.thumb.w, height: a.thumb.h };
       // a clear peak: decent correlation, well above the best other shift in the search
-      const clear = (r, nearby) => r.score > (nearby ? 0.2 : 0.25) && (r.coarse ?? r.score) - Math.max(0, r.second) > 0.08;
+      // (outline x texture scores, from the shape matcher: clear when the best is 15 % above any other shift; checked on
+      // 5 real pairs from two rigs, all right to within 15 px)
+      const clear = (r, nearby) => r.combined ? r.score > 0.05 && (r.score - Math.max(0, r.second)) / r.score > 0.15
+        : r.score > (nearby ? 0.2 : 0.25) && (r.coarse ?? r.score) - Math.max(0, r.second) > 0.08;
       call({ ...msg, near: near ?? undefined })
         // nothing clear near the known shift (the rig was changed, or the remembered value is wrong): search freely
         .then(r => near != null && !clear(r, true)
@@ -516,7 +519,7 @@ document.documentElement.lang = 'en';
         .then(r => {
           const k = a.origW / a.thumb.w, ok = clear(r, near != null && !r.free);
           matches.set(key, { s: r.s * k, dy: r.dy * k, score: r.score, second: r.second, ok, near });
-          if (ok && !a.example) learn(a, key, r.s / a.thumb.w);
+          if (ok && !a.example) learn(a, key, [r.s / a.thumb.w, r.dy / a.thumb.h]);
         })
         .catch(err => matches.set(key, { ok: false, why: err.message, near }))
         .finally(() => { render(); draw(); });
@@ -525,6 +528,7 @@ document.documentElement.lang = 'en';
   // The rail marks are fixed, so the shift between two marks is the same for every pod. Good matches are remembered
   // per mark pair (the last 20); where a pair cannot be matched (a short pod: little or no pod in the overlap, only
   // the plain card) the remembered shift is used instead.
+  // remembered per pair of marks: [shift, up/down] as fractions of the width and height (older entries: shift only)
   function learn(a, key, frac) {
     const pair = `${posOf(a)}-${+posOf(a) + 1}`, L = settings.learned = settings.learned || {};
     const m = L[pair] = L[pair] || {};
@@ -538,8 +542,10 @@ document.documentElement.lang = 'en';
   function knownShift(a) { const c = calibOf(a); if (c) return { frac: c.s, src: 'set' }; const l = learnedShift(a); return l ? { frac: l.frac, src: 'learned' } : null; }
   function learnedShift(a) {
     const m = settings.learned && settings.learned[`${posOf(a)}-${+posOf(a) + 1}`];
-    const v = m ? Object.values(m).sort((x, y) => x - y) : [];
-    return v.length ? { frac: v[v.length >> 1], n: v.length } : null;
+    const v = m ? Object.values(m) : [];
+    if (!v.length) return null;
+    const med = xs => { const t = [...xs].sort((x, y) => x - y); return t[t.length >> 1]; };
+    return { frac: med(v.map(x => Array.isArray(x) ? x[0] : x)), dy: med(v.map(x => Array.isArray(x) ? x[1] : 0)), n: v.length };
   }
   // shift used for the a-b overlap: the match when clear, else the remembered shift for that mark pair
   function shiftFor(a, b) {
@@ -549,7 +555,7 @@ document.documentElement.lang = 'en';
     const c = calibOf(a);
     if (c) return { s: c.s * a.origW, dy: c.dy * a.origH, src: 'set' };
     const l = learnedShift(a);
-    return l ? { s: l.frac * a.origW, dy: 0, src: 'learned' } : null;
+    return l ? { s: l.frac * a.origW, dy: (l.dy || 0) * a.origH, src: 'learned' } : null;
   }
   const matchOf = (a, b) => { const m = a && b && matches.get(a.key + '|' + b.key); return m && m !== 'pending' ? m : null; };
 
@@ -894,7 +900,7 @@ document.documentElement.lang = 'en';
         const sh = shiftFor(a, b) || { s: a.origW * (1 - 0.3), dy: 0 };
         const row = document.createElement('div'); row.className = 'joinAdj';
         row.innerHTML = `<b>${a.shot} | ${b.shot}</b><label>Overlap <output></output><input type="range" min="2" max="95" step="0.2"></label>` +
-          `<label>Up / down <output></output><input type="range" min="-12" max="12" step="0.1"></label>`;
+          `<label>Up / down <output></output><input type="range" min="-25" max="25" step="0.1"></label>`;
         const [ov, ud] = row.querySelectorAll('input'), [ovOut, udOut] = row.querySelectorAll('output');
         ov.value = (100 * (1 - sh.s / a.origW)).toFixed(1); ud.value = (100 * (sh.dy || 0) / a.origH).toFixed(1);
         const show = () => { ovOut.textContent = `${(+ov.value).toFixed(1)}%`; udOut.textContent = `${(+ud.value).toFixed(1)}%`; };
