@@ -13,7 +13,8 @@ const cache = new Map();
 // Sharpness is Laplacian^2 on half-size copies (noise averages out), Gaussian-smoothed. Where some frame has real
 // detail the sharpest frame is chosen; the choice map is median-filtered and spread into a smooth depth surface, and
 // each pixel blends only the frames next to its depth. Flat background comes from the single sharpest frame.
-const STACK = { coarseScale: 0.004, scaleRange: 0.04, coarseShift: 2, maxShift: 4, samples: 8000,
+// maxShift (quarter-size px): the pod rig showed frames up to ~50 px apart (tray settling, lens shift), so +-80 px full size
+const STACK = { coarseScale: 0.004, scaleRange: 0.04, coarseShift: 2, maxShift: 20, samples: 8000,
   fineScale: 0.0005, fineShift: 0.25, halfScale: 0.0001, halfShift: 0.25, lineTol: 0.001,
   energySigma: 4, detail: 1.5, strong: 4, median: 3, wideSigma: 10, keepDilate: 7, keepSigma: 6, power: 6, reach: 0.6 };
 let stackFrames = [];
@@ -111,9 +112,15 @@ function alignScore(pts, frm, s, tx, ty) {
 function searchAlign(pts, frm, start, grid) {
   let best = { ...start, v: alignScore(pts, frm, start.s, start.tx, start.ty) };
   const tryAt = (s, tx, ty) => { const v = alignScore(pts, frm, s, tx, ty); if (v > best.v) best = { s, tx, ty, v }; };
-  if (grid.coarse) for (let s = 1 - STACK.scaleRange; s <= 1 + STACK.scaleRange + 1e-9; s += STACK.coarseScale)
-    for (let tx = -STACK.maxShift; tx <= STACK.maxShift; tx += STACK.coarseShift)
-      for (let ty = -STACK.maxShift; ty <= STACK.maxShift; ty += STACK.coarseShift) tryAt(s, tx, ty);
+  if (grid.coarse) {
+    // shift first (at the expected scale), then scale x shift close to it: the full grid over a wide shift is too slow
+    for (let tx = -STACK.maxShift; tx <= STACK.maxShift; tx += 1)
+      for (let ty = -STACK.maxShift; ty <= STACK.maxShift; ty += 1) tryAt(1, tx, ty);
+    const c = best;
+    for (let s = 1 - STACK.scaleRange; s <= 1 + STACK.scaleRange + 1e-9; s += STACK.coarseScale)
+      for (let tx = c.tx - 4; tx <= c.tx + 4; tx += STACK.coarseShift)
+        for (let ty = c.ty - 4; ty <= c.ty + 4; ty += STACK.coarseShift) tryAt(s, tx, ty);
+  }
   for (let round = 0; round < 2; round++) {
     const c = best;
     for (let s = c.s - grid.ds; s <= c.s + grid.ds + 1e-9; s += grid.sStep) tryAt(s, c.tx, c.ty);

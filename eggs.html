@@ -355,7 +355,7 @@ document.documentElement.lang = 'en';
   } catch {}
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-16d'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-16f'; // bump with every change to a worker, so a browser never keeps an old copy
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
   worker.onmessage = e => { const p = pending.get(e.data.seq); if (p) { pending.delete(e.data.seq); e.data.error ? p.reject(new Error(e.data.error)) : p.resolve(e.data); } };
@@ -1302,7 +1302,9 @@ document.documentElement.lang = 'en';
     for (const f of frames) await stackCall({ type: 'stackAdd', blob: await f.blob, focus: f.focus });
     await helper(`?value=${centre}`); $('focus').value = centre; $('focusOut').textContent = centre;
     const r = await stackCall({ type: 'stackEnd', ref: frames.length >> 1 });
-    $('focusNote').textContent = `Stacked ${r.frames} shots (focus ${shots[0]}–${shots[shots.length - 1]}). ${Math.round(r.detail * 100)}% of the picture has detail.`;
+    const moved = Math.max(0, ...(r.shifts || []).map(a => Math.hypot(a.dx, a.dy)));
+    $('focusNote').textContent = `Stacked ${r.frames} shots (focus ${shots[0]}–${shots[shots.length - 1]}), lined up (they had moved up to ${Math.round(moved)} px). ${Math.round(r.detail * 100)}% of the picture has detail.` +
+      (moved > 60 ? ' The camera or tray moves a lot while stacking: wait a moment after placing the tray, and check nothing touches the stand.' : '');
     const c = document.createElement('canvas'); c.width = r.width; c.height = r.height;
     c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(r.rgba), r.width, r.height), 0, 0);
     return c;
