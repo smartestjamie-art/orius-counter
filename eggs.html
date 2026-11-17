@@ -247,6 +247,8 @@
         <p class="note" id="matchNote"></p>
         <p class="note">Every clear match is remembered for its pair of marks, and used where a pair cannot be matched,
           such as a short pod with only plain card in the overlap.</p>
+        <p class="note">Most exact: a dotted tray strip (<a href="tray_edge_strips.pdf" target="_blank">tray_edge_strips.pdf</a>, A4, printed at 100 %) stuck on the tray above and
+          below the pod, in view in every shot. Its dots move with the pod and are matched one by one.</p>
         <div class="row"><button class="small" id="forgetBtn">Forget remembered overlaps</button></div>
         <p class="note">Where no match is found (or matching is off), count between these edges for each mark:</p>
         <div class="field"><label for="trimPos">Mark</label><select id="trimPos"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></div>
@@ -364,7 +366,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-17a'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-17b'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -524,7 +526,7 @@ document.documentElement.lang = 'en';
           : call({ ...msg, a: a.thumb.g.slice().buffer, b: b.thumb.g.slice().buffer, ma: a.thumb.m.slice().buffer, mb: b.thumb.m.slice().buffer, near }))
         .then(r => {
           const k = a.origW / a.thumb.w, ok = clear(r, near != null && !r.free);
-          matches.set(key, { s: r.s * k, dy: r.dy * k, score: r.score, second: r.second, ok, near });
+          matches.set(key, { s: r.s * k, dy: r.dy * k, score: r.score, second: r.second, ok, near, strip: !!r.strip });
           if (ok && !a.example) learn(a, key, [r.s / a.thumb.w, r.dy / a.thumb.h]);
         })
         .catch(err => matches.set(key, { ok: false, why: err.message, near }))
@@ -557,7 +559,7 @@ document.documentElement.lang = 'en';
   function shiftFor(a, b) {
     if (!a || !b) return null;
     const m = matchOf(a, b);
-    if (m && m.ok) return { s: m.s, dy: m.dy, src: 'match' };
+    if (m && m.ok) return { s: m.s, dy: m.dy, src: m.strip ? 'strip' : 'match' };
     const c = calibOf(a);
     if (c) return { s: c.s * a.origW, dy: c.dy * a.origH, src: 'set' };
     const l = learnedShift(a);
@@ -876,7 +878,7 @@ document.documentElement.lang = 'en';
     $('stitchTitle').textContent = `Stitched pod · ${pod}`;
     for (const { side, shots } of sides) {
       const parts = stitchLayout(shots), total = shots.reduce((t, p) => t + (countOf(p) || 0), 0);
-      const joins = shots.slice(1).map((b, i) => { const sh = shiftFor(shots[i], b); return sh ? { match: 'matched', set: 'set by hand', learned: 'remembered' }[sh.src] : 'mark edges'; });
+      const joins = shots.slice(1).map((b, i) => { const sh = shiftFor(shots[i], b); return sh ? { match: 'matched', strip: 'matched on strip', set: 'set by hand', learned: 'remembered' }[sh.src] : 'mark edges'; });
       const wrap = document.createElement('div'); wrap.className = 'stitch';
       const head = document.createElement('div'); head.className = 'head';
       head.innerHTML = `<span>Side ${side}</span><b>${total} eggs</b><span class="meta"></span>`;
@@ -970,7 +972,7 @@ document.documentElement.lang = 'en';
           (c ? `using the overlap set by hand (${Math.round((1 - c.s) * 100)}%)`
             : l ? `using the overlap remembered from ${l.n} earlier match${l.n > 1 ? 'es' : ''} (${Math.round((1 - Math.abs(l.frac)) * 100)}%)` : 'using the mark setting'));
       }
-      else parts.push(`${q.shot}: overlap ${Math.round((1 - Math.abs(m.s) / ph.origW) * 100)}% of the width, match ${m.score.toFixed(2)}`);
+      else parts.push(`${q.shot}: overlap ${Math.round((1 - Math.abs(m.s) / ph.origW) * 100)}% of the width, ${m.strip ? `matched on the tray strip (${Math.round(m.score * 100)} dots)` : `match ${m.score.toFixed(2)}`}`);
     }
     el.textContent = parts.length ? `This shot (${ph.shot}) · ` + parts.join(' · ') : ph.shot ? `This shot (${ph.shot}) has no neighbouring shot yet.` : '';
   }

@@ -116,8 +116,82 @@ function count({ rgb, width: W, height: H, de, contrast, edge }) {
 // marks on the rail rig, and plain texture also matches things that stay put), each confirmed by the pod's surface
 // texture; score = texture x shape. Without masks, the texture search below.
 function match(m) {
+  if (m.ma && m.mb && !self.MATCH_NOSTRIP) { const r = matchStrip(m); if (r) return r; }
   if (m.ma && m.mb && !self.MATCH_OLD) { const r = matchShape(m); if (r) return r; }
   return matchTexture(m);
+}
+// Tray-edge strips (print/tray_edge_strips.pdf: random black dots, 1.2-3.2 mm, on white, stuck on the tray so they
+// move with the pod). Each shot's dots are found (small, compact, dark on a bright surround, off the pod), and every
+// pair of similar-sized dots, one per shot, votes for the shift between them: the true shift gets a vote from every
+// dot the two shots share, any other only from chance pairs. Things that stay put (rail, screws, vignetting) can only
+// vote near no shift, which the tray never makes. Used only when the vote is clear; otherwise the pod is matched.
+function stripDots(g, raw, W, H) {
+  const mean = boxMean(g, W, H, 16), pod = dilate(podPiece(raw, g, W, H), W, H, 6), d = new Uint8Array(W * H);
+  for (let i = 0; i < d.length; i++) d[i] = !pod[i] && mean[i] > 90 && g[i] < 0.62 * mean[i] ? 1 : 0;
+  const lab = new Int32Array(W * H), stack = new Int32Array(W * H), dots = [];
+  for (let i = 0; i < d.length; i++) {
+    if (!d[i] || lab[i]) continue;
+    let n = 0, sx = 0, sy = 0, x0 = W, x1 = 0, y0 = H, y1 = 0, sp = 0; stack[sp++] = i; lab[i] = 1;
+    while (sp) {
+      const p = stack[--sp], x = p % W, y = (p - x) / W; n++; sx += x; sy += y;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      for (const q of [x > 0 ? p - 1 : -1, x < W - 1 ? p + 1 : -1, y > 0 ? p - W : -1, y < H - 1 ? p + W : -1])
+        if (q >= 0 && d[q] && !lab[q]) { lab[q] = 1; stack[sp++] = q; }
+    }
+    const bw = x1 - x0 + 1, bh = y1 - y0 + 1, edge = x0 === 0 || y0 === 0 || x1 === W - 1 || y1 === H - 1;
+    // a dot: 3 px up to about 4 mm across, round-ish (fills most of its box), not cut by the frame; lines, ruler
+    // ticks, numbers and dark edges are left out
+    if (!edge && n >= 3 && bw <= 40 && bh <= 40 && bw <= 2 * bh + 1 && bh <= 2 * bw + 1 && n >= 0.5 * bw * bh) dots.push([sx / n, sy / n, n]);
+  }
+  return dots;
+}
+function matchStrip({ a, b, ma, mb, width: W, height: H }) {
+  const ga = new Float32Array(a), gb = new Float32Array(b);
+  const A = stripDots(ga, new Uint8Array(ma), W, H), B = stripDots(gb, new Uint8Array(mb), W, H);
+  if (A.length < 15 || B.length < 15) return null;
+  const sAway = W * 0.08, sMax = W * 0.88, dyMax = H * 0.2, bin = 3, nx = Math.ceil(W / bin), ny = Math.ceil(2 * dyMax / bin) + 1;
+  const votes = new Float32Array(nx * ny);
+  for (const [xa, ya, na] of A) for (const [xb, yb, nb] of B) {
+    if (na > 1.6 * nb || nb > 1.6 * na) continue;
+    const s = xa - xb, dy = ya - yb;
+    if (s < sAway || s > sMax || Math.abs(dy) > dyMax) continue;
+    votes[Math.floor((dy + dyMax) / bin) * nx + Math.floor(s / bin)]++;
+  }
+  // votes summed over 3 x 3 bins (a shift on a bin's border splits its votes)
+  const sum = (bx, by) => { let t = 0; for (let j = by - 1; j <= by + 1; j++) for (let i = bx - 1; i <= bx + 1; i++) if (i >= 0 && j >= 0 && i < nx && j < ny) t += votes[j * nx + i]; return t; };
+  // the 15 best-voted shifts (chance pairs among ~150 dots give every shift a few votes, so the votes only shortlist)
+  const cands = [];
+  for (let by = 0; by < ny; by++) for (let bx = 0; bx < nx; bx++) if (votes[by * nx + bx] >= 2) cands.push({ v: sum(bx, by), bx, by });
+  cands.sort((u, v) => v.v - u.v);
+  const top = [];
+  for (const c of cands) { if (top.length >= 15) break; if (top.every(t => Math.abs(t.bx - c.bx) > 2 || Math.abs(t.by - c.by) > 2)) top.push(c); }
+  if (!top.length) return null;
+  // each checked dot by dot: the share of A's dots inside the overlap that land on a B dot of similar size, one to one
+  const cell = 8, gw = Math.ceil(W / cell), grid = new Map();
+  B.forEach((d, j) => { const k = Math.floor(d[1] / cell) * gw + Math.floor(d[0] / cell); (grid.get(k) || grid.set(k, []).get(k)).push(j); });
+  const med = v => { const t = v.sort((x, y) => x - y); return t[t.length >> 1]; };
+  const check = (s, dy, rad) => {
+    const used = new Set(), ss = [], ds = []; let inside = 0;
+    for (const [xa, ya, na] of A) {
+      const x = xa - s, y = ya - dy;
+      if (x < 4 || y < 4 || x > W - 5 || y > H - 5) continue;
+      inside++;
+      let bj = -1, bd = rad * rad;
+      for (let gy = Math.floor(y / cell) - 1; gy <= Math.floor(y / cell) + 1; gy++) for (let gx = Math.floor(x / cell) - 1; gx <= Math.floor(x / cell) + 1; gx++)
+        for (const j of grid.get(gy * gw + gx) || []) {
+          const [xb, yb, nb] = B[j], e = (xb - x) ** 2 + (yb - y) ** 2;
+          if (e < bd && !used.has(j) && na <= 1.5 * nb && nb <= 1.5 * na) { bd = e; bj = j; }
+        }
+      if (bj >= 0) { used.add(bj); ss.push(xa - B[bj][0]); ds.push(ya - B[bj][1]); }
+    }
+    return { n: ss.length, inside, s: ss.length ? med(ss) : s, dy: ds.length ? med(ds) : dy };
+  };
+  const res = top.map(c => { // loosely around the voted bin first, then tightly around the shift those dots give
+    let r = check((c.bx + 0.5) * bin, (c.by + 0.5) * bin - dyMax, 3); r = check(r.s, r.dy, 1.6); return check(r.s, r.dy, 1.6); }).sort((u, v) => v.n - u.n);
+  const best = res[0], second = Math.max(0, ...res.filter(r => Math.abs(r.s - best.s) > 6 || Math.abs(r.dy - best.dy) > 6).map(r => r.n));
+  // clear: ten shared dots at least, a third of the dots in the overlap matched, and twice any other shift
+  if (best.n < 10 || best.n < 0.33 * best.inside || best.n < 2 * second) return null;
+  return { s: Math.round(best.s), dy: Math.round(best.dy), score: best.n / 100, second: second / 100, dots: [A.length, B.length], shared: best.n, inside: best.inside, strip: true, combined: true };
 }
 function matchShape({ a, b, ma, mb, width: W, height: H, near }) {
   const A = texture(new Float32Array(a), W, H), B = texture(new Float32Array(b), W, H);
