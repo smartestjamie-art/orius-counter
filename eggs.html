@@ -366,7 +366,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-17b'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-17c'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -1185,8 +1185,17 @@ document.documentElement.lang = 'en';
     $('focusOut').textContent = h.auto ? 'auto' : h.value;
     f.oninput = () => {
       stackShots = null; // the stack range was found around another focus
-      $('focusOut').textContent = f.value; clearTimeout(f.t); f.t = setTimeout(() => helper(`?value=${f.value}`), 60); };
+      $('focusOut').textContent = f.value; clearTimeout(f.t); f.t = setTimeout(() => { helper(`?value=${f.value}`); rememberFocus(f.value); }, 60); };
     $('focusConnect').hidden = true; $('focusNote').textContent = 'Drag Focus, or press Find sharpest focus. Zoom into the pod (click the preview) to judge it.';
+    // The camera was used elsewhere (another page, autofocus, another app) and is now outside the sharp range learned
+    // here: go back to the last focus used on this page, so only a fine search is needed.
+    const last = lastFocus(), win = focusWindow();
+    if (last != null && last >= h.min && last <= h.max && last !== h.value && (h.auto || (win && (h.value < win.lo || h.value > win.hi)))) {
+      if (await helper(`?value=${last}`)) {
+        f.value = last; $('focusOut').textContent = last;
+        $('focusNote').textContent = `Focus was ${h.auto ? 'on autofocus' : `${h.value}, outside this page’s sharp range`}: set back to ${last}, the last focus used here. Press Find sharpest focus to fine-tune.`;
+      }
+    }
     return true;
   }
   $('focusConnectBtn').onclick = async () => {
@@ -1212,6 +1221,9 @@ document.documentElement.lang = 'en';
     return { lo: Math.max(focusHW.min, Math.min(...seen.map(s => s[0])) - FOCUS_PAD),
       hi: Math.min(focusHW.max, Math.max(...seen.map(s => s[1])) + FOCUS_PAD), n: seen.length };
   }
+  // the last focus set on this page (slider or search), restored when the camera comes back from other use
+  function lastFocus() { let v = null; try { v = JSON.parse(localStorage.getItem('eggFocusLast')); } catch {} return Number.isFinite(v) ? v : null; }
+  function rememberFocus(v) { try { localStorage.setItem('eggFocusLast', JSON.stringify(Math.round(+v))); } catch {} }
   function learnFocus(lo, hi) {
     const seen = focusSeen().concat([[Math.round(lo), Math.round(hi)]]).slice(-FOCUS_KEEP);
     try { localStorage.setItem('eggFocusWindow', JSON.stringify({ seen })); localStorage.removeItem('eggStackRange'); } catch {}
@@ -1261,7 +1273,7 @@ document.documentElement.lang = 'en';
     while (stream && best === hi && hi < all.max) { hi = Math.min(all.max, hi + step); if (await measure(hi) < bestScore) break; }
     const centre = best;
     for (let v = Math.max(all.min, centre - step + 4); v <= Math.min(all.max, centre + step - 4) && stream; v += 4) await measure(v);
-    await helper(`?value=${best}`); learnFocus(best, best); f.value = best; $('focusOut').textContent = best;
+    await helper(`?value=${best}`); learnFocus(best, best); rememberFocus(best); f.value = best; $('focusOut').textContent = best;
     $('focusNote').textContent = `Focus set to ${best} (sharpness ${bestScore.toFixed(1)}). It stays there until you press Autofocus.`;
     $('focusSweepBtn').disabled = false; sweeping = false;
   };
@@ -1435,7 +1447,7 @@ document.documentElement.lang = 'en';
       learnFocus(lo, hi);
       stackShots = rangePositions(r.list);
       const mid = stackShots[stackShots.length >> 1];
-      await helper(`?value=${mid}`); $('focus').value = mid; $('focusOut').textContent = mid;
+      await helper(`?value=${mid}`); rememberFocus(mid); $('focus').value = mid; $('focusOut').textContent = mid;
       const tilt = r.left != null && r.right != null && Math.abs(r.left - r.right) > 100
         ? ` The left end of the picture is sharpest at ${Math.round(r.left)} and the right end at ${Math.round(r.right)}: the tray or the camera is tilted. Level them and fewer shots are needed, each sharper.` : '';
       $('focusNote').textContent = `Sharpest focus over the pod, rims and both ends included: ${lo}–${hi} (${r.list.length} parts). ` +
