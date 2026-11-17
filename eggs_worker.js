@@ -121,7 +121,11 @@ function match(m) {
 }
 function matchShape({ a, b, ma, mb, width: W, height: H, near }) {
   const A = texture(new Float32Array(a), W, H), B = texture(new Float32Array(b), W, H);
-  const rawA = new Uint8Array(ma), rawB = new Uint8Array(mb);
+  // The green mask is speckled wherever eggs and brown patches are dense, and podMask's erosion then wipes out most of
+  // the real pod, leaving solid false patches (vignetted card corners and edges, the dark tray end) as all the "pod"
+  // two shots share: on the 'test' pod's A3|A4 the texture was compared on A3's vignetted right edge and a join 29 %
+  // of a frame off won. So the speckles are closed first, and only the main pod piece, not dark, is kept.
+  const rawA = podPiece(new Uint8Array(ma), new Float32Array(a), W, H), rawB = podPiece(new Uint8Array(mb), new Float32Array(b), W, H);
   const MA = podMask(rawA, W, H), MB = podMask(rawB, W, H);
   const shapeOf = raw => { const o = dilate(erode(raw, W, H, 2), W, H, 2), f = new Float32Array(W * H); for (let i = 0; i < f.length; i++) f[i] = o[i]; return boxMean(f, W, H, 4); };
   const q = 4, wq = Math.floor(W / q), hq = Math.floor(H / q), SA = shrink(shapeOf(rawA), W, H, q), SB = shrink(shapeOf(rawB), W, H, q);
@@ -217,6 +221,30 @@ function shrink(v, W, H, f) {
     for (let j = 0; j < f; j++) for (let i = 0; i < f; i++) s += v[(y * f + j) * W + x * f + i];
     out[y * w + x] = s / (f * f);
   }
+  return out;
+}
+// The pod as one piece: green and not dark (the tray end and deep vignetting are dark), speckles closed, the largest
+// piece only.
+function podPiece(raw, lum, W, H) {
+  const m = new Uint8Array(W * H);
+  for (let i = 0; i < m.length; i++) m[i] = raw[i] && lum[i] > 45 ? 1 : 0;
+  const c = erode(dilate(m, W, H, 3), W, H, 3);
+  const lab = new Int32Array(W * H), stack = new Int32Array(W * H);
+  let best = 0, bestN = 0, id = 0;
+  for (let i = 0; i < c.length; i++) {
+    if (!c[i] || lab[i]) continue;
+    id++; let n = 0, sp = 0; stack[sp++] = i; lab[i] = id;
+    while (sp) {
+      const p = stack[--sp], x = p % W; n++;
+      if (x > 0 && c[p - 1] && !lab[p - 1]) { lab[p - 1] = id; stack[sp++] = p - 1; }
+      if (x < W - 1 && c[p + 1] && !lab[p + 1]) { lab[p + 1] = id; stack[sp++] = p + 1; }
+      if (p >= W && c[p - W] && !lab[p - W]) { lab[p - W] = id; stack[sp++] = p - W; }
+      if (p < W * (H - 1) && c[p + W] && !lab[p + W]) { lab[p + W] = id; stack[sp++] = p + W; }
+    }
+    if (n > bestN) { bestN = n; best = id; }
+  }
+  const out = new Uint8Array(W * H);
+  for (let i = 0; i < out.length; i++) out[i] = best && lab[i] === best ? 1 : 0;
   return out;
 }
 // pod in both shots: the mask cleaned of specks and slightly shrunk, so the pod's own texture is matched, not its rim
