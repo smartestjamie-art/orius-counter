@@ -153,12 +153,6 @@
   td select, td input[type="text"] { padding: 5px 6px; font-size: 13px; }
   td input[type="text"] { width: 9em; }
   .field { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: center; margin: 8px 0; font-size: 14px; }
-  .shots { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 10px; }
-  .shots span { border: 1px solid var(--line); border-radius: 7px; padding: 6px 8px; font-size: 12px; color: var(--muted);
-    display: flex; justify-content: space-between; gap: 6px; }
-  .shots span b { font: 600 13px var(--font-mono); color: var(--ink); font-variant-numeric: tabular-nums; }
-  .shots span.have { border-color: var(--accent); background: var(--accent-soft); }
-  .shots span.next { border-style: dashed; border-color: var(--amber); }
   td.pods { font: 600 14px var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
   td.pods.total { color: var(--accent); }
 </style>
@@ -207,10 +201,7 @@
         <h2>Pod</h2>
         <div class="field"><label for="podId">Pod ID</label><input type="text" id="podId" spellcheck="false" autocomplete="off"></div>
         <div class="row"><button class="small" id="flipBtn">Side B next</button><button class="small" id="newPodBtn">Next pod</button></div>
-        <p class="note">New photos go to this pod, in order: side A at rail marks 1, 2, 3 …, then flip and side B at 1, 2, 3 … (four marks on the manual rail; the Stage panel sets how many shots the motorised stage takes).
-          A short pod that needs fewer marks: press <b>Side B next</b> after its last A shot.
-          Change a photo's pod or shot in the list.</p>
-        <div class="shots" id="shots"></div>
+        <p class="note">Scan side A with the Stage panel, flip the pod, press <b>Side B next</b> and scan again. Then <b>Next pod</b>.</p>
       </div>
 
 
@@ -279,18 +270,18 @@
       </div>
 
       <div class="panel">
-        <h2>Overlap between rail marks</h2>
+        <h2>Overlap between shots</h2>
         <label class="check"><input type="checkbox" id="autoOverlap"> Find the overlap by matching neighbouring shots</label>
-        <p class="note">Shots at neighbouring marks of the same side overlap. Each overlap is split down the middle, so every
+        <p class="note">Neighbouring shots of the same side overlap. Each overlap is split down the middle, so every
           egg is counted once; shaded parts are not counted.</p>
         <p class="note" id="matchNote"></p>
-        <p class="note">Every clear match is remembered for its pair of marks, and used where a pair cannot be matched,
+        <p class="note">Every clear match is remembered for its pair of shots, and used where a pair cannot be matched,
           such as a short pod with only plain card in the overlap.</p>
         <p class="note">Most exact: a dotted tray strip (<a href="tray_edge_strips.pdf" target="_blank">tray_edge_strips.pdf</a>, A4, printed at 100 %) stuck on the tray above and
           below the pod, in view in every shot. Its dots move with the pod and are matched one by one.</p>
         <div class="row"><button class="small" id="forgetBtn">Forget remembered overlaps</button></div>
-        <p class="note">Where no match is found (or matching is off), count between these edges for each mark:</p>
-        <div class="field"><label for="trimPos">Mark</label><select id="trimPos"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></div>
+        <p class="note">Where no match is found (or matching is off), count between these edges for each shot:</p>
+        <div class="field"><label for="trimPos">Shot</label><select id="trimPos"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></div>
         <div class="slider"><label for="trimL">Count from</label><output id="trimLOut"></output><input type="range" id="trimL" min="0" max="50" step="1"></div>
         <div class="slider"><label for="trimR">Count to</label><output id="trimROut"></output><input type="range" id="trimR" min="50" max="100" step="1"></div>
       </div>
@@ -359,7 +350,7 @@
       <h2 id="stitchTitle">Stitched pod</h2>
       <p class="note" style="margin-top:0">Each side's shots joined where they overlap: every part of the pod appears once, so
         every egg is counted once. If a join shows a step or a repeated piece, drag its Overlap (and Up / down) until the
-        pod runs on smoothly and press Save for these marks: the rail marks are fixed, so it holds for every pod, and
+        pod runs on smoothly and press Save for these shots: the stage steps the same way each time, so it holds for every pod, and
         later pods are matched close to it.</p>
       <div id="stitchSides"></div>
     </div>
@@ -407,7 +398,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-19c'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-19d'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -954,7 +945,7 @@ document.documentElement.lang = 'en';
         ov.value = (100 * (1 - sh.s / a.origW)).toFixed(1); ud.value = (100 * (sh.dy || 0) / a.origH).toFixed(1);
         const show = () => { ovOut.textContent = `${(+ov.value).toFixed(1)}%`; udOut.textContent = `${(+ud.value).toFixed(1)}%`; };
         show();
-        const save = document.createElement('button'); save.className = 'small'; save.textContent = 'Save for these marks';
+        const save = document.createElement('button'); save.className = 'small'; save.textContent = 'Save for these shots';
         const clear = document.createElement('button'); clear.className = 'small'; clear.textContent = 'Back to automatic';
         clear.hidden = !calibOf(a);
         // live preview: this join set from the sliders, the others as they are
@@ -1019,17 +1010,8 @@ document.documentElement.lang = 'en';
   }
 
   function renderShots() {
-    const el = $('shots'); el.textContent = '';
     const hasB = photos.some(p => !p.example && p.pod === podId && (p.shot || '')[0] === 'B');
     $('flipBtn').hidden = hasB; $('flipBtn').textContent = flipped.has(podId) ? 'Back to side A' : 'Side B next';
-    const have = new Map(podPhotos(podId).map(p => [p.shot, p])), next = nextShot(podId);
-    for (const s of SHOTS) {
-      const sp = document.createElement('span'), p = have.get(s);
-      sp.className = p ? 'have' : s === next ? 'next' : '';
-      sp.innerHTML = `${s}<b>${p ? countOf(p) ?? '…' : s === next ? 'next' : ''}</b>`;
-      if (p) { sp.style.cursor = 'pointer'; sp.onclick = () => select(p); }
-      el.appendChild(sp);
-    }
   }
 
   function renderList() {
@@ -1084,7 +1066,7 @@ document.documentElement.lang = 'en';
   function renderFix() {
     $('fixBtn').setAttribute('aria-pressed', fixing); $('fixBtn').textContent = fixing ? 'Done correcting' : 'Correct mistakes';
     $('stage').classList.toggle('correcting', fixing); $('fixKey').hidden = !fixing;
-    $('stageHint').textContent = !$('video').hidden ? 'Live preview. Line the pod up with the rail mark, then press Capture. Click to zoom 3× or back; Ctrl + scroll or pinch to zoom, drag to move.'
+    $('stageHint').textContent = !$('video').hidden ? 'Live preview. Move the stage to frame the pod, then press Capture or Scan this side. Click to zoom 3× or back; Ctrl + scroll or pinch to zoom, drag to move.'
       : fixing ? 'Click a dot that is not an egg to strike it out, or a missed egg to add it. Click a mark again to undo. Shift-click zooms.'
       : 'Click to zoom 3× or back; pinch or Ctrl + scroll to zoom, scroll or drag to move around. Drop photos on it to add them.';
     const ph = selected, f = ph && ph.fix;
@@ -1112,7 +1094,7 @@ document.documentElement.lang = 'en';
   }
   $('trimPos').onchange = renderTrim;
   $('autoOverlap').checked = settings.autoOverlap;
-  $('forgetBtn').onclick = () => { settings.learned = {}; saveSettings(); render(); draw(); $('saveNote').textContent = 'Remembered overlaps cleared (use this after moving the rail marks).'; };
+  $('forgetBtn').onclick = () => { settings.learned = {}; saveSettings(); render(); draw(); $('saveNote').textContent = 'Remembered overlaps cleared (use this after changing the X step).'; };
   $('autoOverlap').onchange = () => { settings.autoOverlap = $('autoOverlap').checked; saveSettings(); updateMatches(); render(); draw(); };
   $('trimL').oninput = $('trimR').oninput = () => {
     settings.trim[$('trimPos').value] = [+$('trimL').value, +$('trimR').value]; saveSettings();
