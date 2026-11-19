@@ -207,7 +207,7 @@
         <h2>Pod</h2>
         <div class="field"><label for="podId">Pod ID</label><input type="text" id="podId" spellcheck="false" autocomplete="off"></div>
         <div class="row"><button class="small" id="flipBtn">Side B next</button><button class="small" id="newPodBtn">Next pod</button></div>
-        <p class="note">New photos go to this pod, in order: side A at rail marks 1, 2, 3, 4, then flip and side B at 1, 2, 3, 4.
+        <p class="note">New photos go to this pod, in order: side A at rail marks 1, 2, 3 …, then flip and side B at 1, 2, 3 … (four marks on the manual rail; the Stage panel sets how many shots the motorised stage takes).
           A short pod that needs fewer marks: press <b>Side B next</b> after its last A shot.
           Change a photo's pod or shot in the list.</p>
         <div class="shots" id="shots"></div>
@@ -237,6 +237,10 @@
             <div class="field"><label for="stageStartX">Scan start X mm</label><input type="number" id="stageStartX" value="0" step="0.1"></div>
             <div class="row"><button class="small" id="stageHereBtn">Use current X</button></div>
             <div class="field"><label for="stageStepX">X step per shot mm</label><input type="number" id="stageStepX" value="8" min="0.5" step="0.5"></div>
+            <div class="field"><label for="stageShots">Shots per side</label><select id="stageShots"></select></div>
+            <label class="check"><input type="checkbox" id="stageCentre" checked> Keep the pod centred with Y, and stop where the pod ends</label>
+            <label class="check"><input type="checkbox" id="stageAutoStep" checked> X step from the calibration (30 % overlap)</label>
+            <div class="row" style="margin-top:4px"><button class="small" id="stageCalBtn" title="With the pod in view: moves Y by 1 mm and back, and measures how far the pod moved in the picture">Calibrate (moves Y 1 mm)</button><span class="meta" id="stageCalNote" style="margin:0"></span></div>
             <label class="check"><input type="checkbox" id="stageScanAf" checked> Autofocus at every shot</label>
             <div class="row" style="margin-top:8px"><button class="primary" id="stageScanBtn">Scan this side</button></div>
             <details style="margin-top:10px"><summary class="note" style="cursor:pointer">GRBL console (settings, $$, ?)</summary>
@@ -385,10 +389,12 @@
 document.documentElement.lang = 'en';
 (() => {
   const $ = id => document.getElementById(id);
-  const MARKS = 4; // rail marks per side: a pod needs four shots to be covered
+  // shots per side: 4 on the manual rail (its four marks); the motorised stage can take up to 9 (set in the Stage panel)
+  const MARKS = (() => { try { const n = +localStorage.getItem('eggShotsPerSide'); return n >= 1 && n <= 9 ? n : 4; } catch { return 4; } })();
+  $('trimPos').innerHTML = Array.from({ length: MARKS }, (_, i) => `<option value="${i + 1}">${i + 1}</option>`).join('');
   const SHOTS = ['A', 'B'].flatMap(side => Array.from({ length: MARKS }, (_, i) => side + (i + 1)));
   // contrast 20: on the closer rig (pod 'test', 16 Nov) 14 also marked plain fuzz; 20 marked 23 where 22 eggs are seen by eye
-  const DEFAULTS = { eggPx: null, contrast: 20, edge: 1.3, autoOverlap: true, trim: { 1: [0, 100], 2: [0, 100], 3: [0, 100], 4: [0, 100] } };
+  const DEFAULTS = { eggPx: null, contrast: 20, edge: 1.3, autoOverlap: true, trim: Object.fromEntries(Array.from({ length: 9 }, (_, i) => [i + 1, [0, 100]])) };
   let settings = structuredClone(DEFAULTS), podId = 'Pod 1';
   try {
     const s = JSON.parse(localStorage.getItem('eggSettings') || 'null');
@@ -401,7 +407,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-19b'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-19c'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -1668,9 +1674,67 @@ document.documentElement.lang = 'en';
     stageMsg(`Focus at Z ${f.best.toFixed(3)} (sharpness ${f.bs.toFixed(1)}).`);
   }
   $('stageAfBtn').onclick = e => stageRun(e.target, () => stageAutofocus(parseFloat($('stageAfRange').value) || 1));
+  // Shots per side (reloads the page so every list, trim and export uses the new number)
+  $('stageShots').innerHTML = Array.from({ length: 9 }, (_, i) => `<option value="${i + 1}"${i + 1 === MARKS ? ' selected' : ''}>${i + 1}</option>`).join('');
+  $('stageShots').onchange = () => { try { localStorage.setItem('eggShotsPerSide', $('stageShots').value); } catch {} location.reload(); };
+  // Where the pod is in the picture: dark pixels (pod) on the white board, on a 160 px wide copy.
+  // Returns the dark fraction and the centroid in picture fractions (0..1).
+  function podCentre() {
+    const v = $('video'), w = 160, h = Math.round(160 * v.videoHeight / v.videoWidth);
+    const c = podCentre.c || (podCentre.c = document.createElement('canvas')); c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(v, 0, 0, w, h);
+    const d = ctx.getImageData(0, 0, w, h).data, g = new Float32Array(w * h);
+    for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2];
+    // the board's brightness: measured at calibration (when the board shows); at high zoom the pod can fill the picture
+    const p90 = Float32Array.from(g).sort()[Math.floor(g.length * 0.9)], bright = stageCal && stageCal.bright ? stageCal.bright : p90, thr = 0.72 * bright;
+    let n = 0, sx = 0, sy = 0;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (g[y * w + x] < thr) { n++; sx += x; sy += y; }
+    return n ? { frac: n / g.length, cx: sx / n / w, cy: sy / n / h, p90 } : { frac: 0, cx: 0.5, cy: 0.5, p90 };
+  }
+  // Calibration: how the pod moves in the picture for +1 mm of Y (fractions per mm), so Y can re-centre it, and the
+  // picture's size in mm along X (same lens, square pixels), so the X step can give 30 % overlap.
+  let stageCal = null;
+  try { stageCal = JSON.parse(localStorage.getItem('eggStageCal') || 'null'); } catch {}
+  const calNote = () => { $('stageCalNote').textContent = stageCal ? `${stageCal.pxPerMm.toFixed(0)} px/mm · X step ${autoStepX().toFixed(1)} mm` : 'not calibrated'; };
+  function autoStepX() {
+    const v = $('video'), W = v.videoWidth || stageCal.W, H = v.videoHeight || stageCal.H;
+    const vx = stageCal.du * W, vy = stageCal.dv * H, L = Math.hypot(vx, vy);
+    const extent = Math.abs(W * vy / L) + Math.abs(H * vx / L);      // picture size along X (perpendicular to Y's motion)
+    return 0.7 * extent / stageCal.pxPerMm;
+  }
+  calNote();
+  async function stageCalibrate() {
+    if (!stream || !$('video').videoWidth) throw new Error('Start the camera first.');
+    const a = podCentre(); if (a.frac < 0.02) throw new Error('Put the pod in view first.');
+    stageCal = null; const a0 = podCentre(); if (a0.frac > 0.85) throw new Error('The pod fills the picture: zoom out (or move Y) so some board shows, then calibrate.');
+    const y0 = rig.pos[1];
+    await stageMoveTo({ y: y0 + 1 }); await sleepMs(300); const b = podCentre();
+    await stageMoveTo({ y: y0 }); await sleepMs(300);
+    const v = $('video'), du = b.cx - a.cx, dv = b.cy - a.cy, pxPerMm = Math.hypot(du * v.videoWidth, dv * v.videoHeight);
+    if (pxPerMm < 5) throw new Error('The pod did not move in the picture: check the Y motor and its cable.');
+    stageCal = { du, dv, pxPerMm, W: v.videoWidth, H: v.videoHeight, bright: a.frac < 0.85 ? a.p90 : null };
+    try { localStorage.setItem('eggStageCal', JSON.stringify(stageCal)); } catch {}
+    calNote(); if ($('stageAutoStep').checked) $('stageStepX').value = autoStepX().toFixed(1);
+    stageMsg(`Calibrated: ${pxPerMm.toFixed(0)} px per mm.`);
+  }
+  $('stageCalBtn').onclick = e => stageRun(e.target, stageCalibrate);
+  // Move Y so the pod's centre sits in the middle of the picture (twice, to settle); false when no pod is in view.
+  async function stageCentrePod() {
+    for (let i = 0; i < 2; i++) {
+      const c = podCentre(); if (c.frac < 0.02) return false; if (c.frac > 0.9) return true;   // pod fills the picture: nothing to centre on
+      const ou = c.cx - 0.5, ov = c.cy - 0.5, n2 = stageCal.du ** 2 + stageCal.dv ** 2;
+      const dy = Math.max(-10, Math.min(10, -(ou * stageCal.du + ov * stageCal.dv) / n2));
+      if (Math.abs(dy) < 0.05) break;
+      await stageMoveTo({ y: rig.pos[1] + dy }); await sleepMs(250);
+    }
+    return true;
+  }
   // Scan: the remaining shots of this side, X stepped from the start, autofocus, then the normal Capture.
   $('stageScanBtn').onclick = e => stageRun(e.target, async () => {
     if (!stream || !$('video').videoWidth) throw new Error('Start the camera first.');
+    const centre = $('stageCentre').checked;
+    if (centre && !stageCal) await stageCalibrate();
+    if (stageCal && $('stageAutoStep').checked) $('stageStepX').value = autoStepX().toFixed(1);
     const x0 = parseFloat($('stageStartX').value), dx = parseFloat($('stageStepX').value);
     if (!Number.isFinite(x0) || !(dx > 0)) throw new Error('Set the scan start and the X step.');
     rig.scanStop = false; let n = 0, side = null;
@@ -1679,7 +1743,8 @@ document.documentElement.lang = 'en';
       const k = parseInt(shot.slice(1), 10) - 1;
       if (side === null) side = shot[0]; else if (shot[0] !== side || k === 0) break;   // this side is done
       stageMsg(`Shot ${shot}: moving to X ${(x0 + k * dx).toFixed(2)}…`);
-      await stageMoveTo({ x: x0 + k * dx });
+      await stageMoveTo({ x: x0 + k * dx }); await sleepMs(250);
+      if (centre && !await stageCentrePod()) { if (n) { stageMsg('The pod ends here.'); break; } throw new Error('No pod in view at the start: move X (and Y) until it is.'); }
       if ($('stageScanAf').checked) await stageAutofocus(Math.min(1, parseFloat($('stageAfRange').value) || 1));
       await $('captureBtn').onclick(); while (capturing) await sleepMs(200);
       n++;
