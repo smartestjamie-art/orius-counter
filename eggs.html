@@ -239,6 +239,10 @@
             <div class="field"><label for="stageStepX">X step per shot mm</label><input type="number" id="stageStepX" value="8" min="0.5" step="0.5"></div>
             <label class="check"><input type="checkbox" id="stageScanAf" checked> Autofocus at every shot</label>
             <div class="row" style="margin-top:8px"><button class="primary" id="stageScanBtn">Scan this side</button></div>
+            <details style="margin-top:10px"><summary class="note" style="cursor:pointer">GRBL console (settings, $$, ?)</summary>
+              <div class="row" style="margin-top:6px"><input type="text" id="stageCmd" spellcheck="false" autocomplete="off" placeholder="$$" style="flex:1 1 140px;min-width:0"><button class="small" id="stageCmdBtn">Send</button></div>
+              <pre id="stageLog" style="margin:6px 0 0;max-height:180px;overflow:auto;font-size:12px;white-space:pre-wrap"></pre>
+            </details>
           </div>
           <p class="note" id="stageNote">Connect the Arduino by USB, press Connect stage and pick its port. After switching on, press Home (or Unlock).</p>
           <p class="note">Jog: click for one step, hold for continuous movement. Keys: ← → move X, ↑ ↓ move Y, Page Up/Down move Z. Captured photos carry the stage position in their file name.</p>
@@ -397,7 +401,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-19a'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-19b'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -1556,7 +1560,9 @@ document.documentElement.lang = 'en';
     if (line === 'ok' || line.startsWith('error')) { const w = rig.waiters.shift(); if (w) (line === 'ok' ? w.ok() : w.fail(new Error('GRBL ' + line))); return; }
     if (line.startsWith('ALARM')) { stageMsg(`${line}: press Home, or Unlock to move without homing.`); for (const w of rig.waiters.splice(0)) w.fail(new Error(line)); return; }
     if (line.startsWith('Grbl')) { stageMsg(`Connected: ${line}. Press Home (or Unlock).`); for (const w of rig.waiters.splice(0)) w.fail(new Error('reset')); }
+    stageLog(line);
   }
+  function stageLog(line) { const el = $('stageLog'), lines = (el.textContent + line + '\n').split('\n'); el.textContent = lines.slice(-40).join('\n'); el.scrollTop = el.scrollHeight; }
   async function stageReadLoop() {
     try {
       while (rig.reader) {
@@ -1623,6 +1629,9 @@ document.documentElement.lang = 'en';
   function stageTag() {   // machine position in the photo's file name, for stitching
     return rig && rig.port ? `_X${rig.pos[0].toFixed(2)}_Y${rig.pos[1].toFixed(2)}_Z${rig.pos[2].toFixed(3)}` : '';
   }
+  // console: any GRBL command or setting; replies (and $$ listings) show in the log
+  const sendTyped = () => { const c = $('stageCmd').value.trim(); if (!c || !rig.port) return; stageLog('> ' + c); stageSend(c).then(() => stageLog('ok')).catch(e => stageLog(e.message)); $('stageCmd').value = ''; };
+  $('stageCmdBtn').onclick = sendTyped; $('stageCmd').addEventListener('keydown', e => { if (e.key === 'Enter') sendTyped(); });
   $('stageHereBtn').onclick = () => { $('stageStartX').value = rig.pos[0].toFixed(2); };
   // Focus score: variance of the Laplacian of a lightly blurred grey ROI (MicroScanner's LoG metric), averaged over two
   // frames so camera noise doesn't pick the peak. Higher = sharper.
