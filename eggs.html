@@ -213,6 +213,37 @@
         <div class="shots" id="shots"></div>
       </div>
 
+
+      <div class="panel" id="stagePanel">
+        <h2>Stage (X Y Z)</h2>
+        <p class="note" id="stageNoSerial" hidden>Motor control needs Chrome or Edge on a computer (Web Serial).</p>
+        <div id="stageBody">
+          <div class="row"><button class="small" id="stageConnectBtn">Connect stage</button><span class="meta" id="stageStatus" style="margin:0">Not connected</span></div>
+          <div id="stageCtl" hidden>
+            <div class="row" style="margin-top:8px">
+              <button class="small" id="stageHomeBtn" title="Run every axis to its limit switch and set zero there">Home</button>
+              <button class="small" id="stageUnlockBtn" title="Clear an alarm without homing">Unlock</button>
+              <button class="small" id="stageStopBtn" title="Stop all motion now">Stop</button>
+            </div>
+            <div class="field"><label for="stageStep">Jog step</label>
+              <select id="stageStep"><option>0.02</option><option>0.1</option><option selected>1</option><option>5</option><option>20</option></select></div>
+            <div class="row">
+              <button class="small" data-jog="X-1">X −</button><button class="small" data-jog="X1">X +</button>
+              <button class="small" data-jog="Y-1">Y −</button><button class="small" data-jog="Y1">Y +</button>
+              <button class="small" data-jog="Z1">Z ↑</button><button class="small" data-jog="Z-1">Z ↓</button>
+            </div>
+            <div class="field"><label for="stageAfRange">Focus range ± mm</label><input type="number" id="stageAfRange" value="1" min="0.1" max="10" step="0.1"></div>
+            <div class="row"><button class="small" id="stageAfBtn">Autofocus with Z</button></div>
+            <div class="field"><label for="stageStartX">Scan start X mm</label><input type="number" id="stageStartX" value="0" step="0.1"></div>
+            <div class="row"><button class="small" id="stageHereBtn">Use current X</button></div>
+            <div class="field"><label for="stageStepX">X step per shot mm</label><input type="number" id="stageStepX" value="8" min="0.5" step="0.5"></div>
+            <label class="check"><input type="checkbox" id="stageScanAf" checked> Autofocus at every shot</label>
+            <div class="row" style="margin-top:8px"><button class="primary" id="stageScanBtn">Scan this side</button></div>
+          </div>
+          <p class="note" id="stageNote">Connect the Arduino by USB, press Connect stage and pick its port. After switching on, press Home (or Unlock).</p>
+          <p class="note">Jog: click for one step, hold for continuous movement. Keys: ← → move X, ↑ ↓ move Y, Page Up/Down move Z. Captured photos carry the stage position in their file name.</p>
+        </div>
+      </div>
       <div class="panel" id="cameraPanel" hidden>
         <h2>Camera</h2>
         <div class="row"><select id="camSelect" aria-label="Camera"></select></div>
@@ -366,7 +397,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-17c'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-19a'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -1498,13 +1529,156 @@ document.documentElement.lang = 'en';
     }
     const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.95));
     const shot = nextShot(podId), stamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '_');
-    const name = `${podId.replace(/[^\w-]+/g, '_')}_${shot || 'extra'}_${stamp}${stacked ? '_stack' : ''}.jpg`;
+    const name = `${podId.replace(/[^\w-]+/g, '_')}_${shot || 'extra'}_${stamp}${stacked ? '_stack' : ''}${stageTag()}.jpg`;
     addPhoto(blob, name, { select: false });
     $('saveNote').textContent = `Captured ${name}.`;
     renderCaptureBtn(); renderShots();
   };
   $('podId').addEventListener('input', renderCaptureBtn);
   $('newPodBtn').addEventListener('click', renderCaptureBtn);
+  // ---------- motorised stage: GRBL on an Arduino + CNC Shield, over Web Serial ----------
+  // X moves the riser stack along the rails (the pod), Y moves the tray front-back, Z moves the microscope (focus).
+  // Commands wait for GRBL's "ok"; '?' is polled for the state and machine position.
+  const rig = { port: null, writer: null, reader: null, buf: '', waiters: [], state: '', pos: [0, 0, 0], poll: null, busy: false };
+  const FEED = { X: 1500, Y: 300, Z: 200 };
+  if (!('serial' in navigator)) { $('stageNoSerial').hidden = false; $('stageBody').hidden = true; }
+  const enc = new TextEncoder(), dec = new TextDecoder();
+  const stageMsg = t => { $('stageNote').textContent = t; };
+  async function stageRaw(str) { if (rig.writer) await rig.writer.write(enc.encode(str)); }
+  function stageLine(line) {
+    line = line.trim(); if (!line) return;
+    if (line[0] === '<') {
+      const m = line.slice(1, -1).split('|'); rig.state = m[0];
+      const mp = m.find(f => f.startsWith('MPos:')); if (mp) rig.pos = mp.slice(5).split(',').map(Number);
+      $('stageStatus').textContent = `${rig.state} · X ${rig.pos[0].toFixed(2)} Y ${rig.pos[1].toFixed(2)} Z ${rig.pos[2].toFixed(3)}`;
+      return;
+    }
+    if (line === 'ok' || line.startsWith('error')) { const w = rig.waiters.shift(); if (w) (line === 'ok' ? w.ok() : w.fail(new Error('GRBL ' + line))); return; }
+    if (line.startsWith('ALARM')) { stageMsg(`${line}: press Home, or Unlock to move without homing.`); for (const w of rig.waiters.splice(0)) w.fail(new Error(line)); return; }
+    if (line.startsWith('Grbl')) { stageMsg(`Connected: ${line}. Press Home (or Unlock).`); for (const w of rig.waiters.splice(0)) w.fail(new Error('reset')); }
+  }
+  async function stageReadLoop() {
+    try {
+      while (rig.reader) {
+        const { value, done } = await rig.reader.read(); if (done) break;
+        rig.buf += dec.decode(value); let i;
+        while ((i = rig.buf.indexOf('\n')) >= 0) { stageLine(rig.buf.slice(0, i)); rig.buf = rig.buf.slice(i + 1); }
+      }
+    } catch (e) { stageMsg('Stage connection lost: ' + e.message); }
+    stageClosed();
+  }
+  function stageSend(cmd) {
+    return new Promise((ok, fail) => { rig.waiters.push({ ok, fail }); stageRaw(cmd + '\n').catch(fail); });
+  }
+  const sleepMs = ms => new Promise(r => setTimeout(r, ms));
+  async function stageIdle() {
+    await sleepMs(150);
+    for (let t = 0; t < 1200; t++) { await stageRaw('?'); await sleepMs(100); if (rig.state === 'Idle') return; if (/Alarm|Door/.test(rig.state)) throw new Error('Stage ' + rig.state); }
+    throw new Error('The stage did not stop moving.');
+  }
+  async function stageMoveTo(p) {   // p: { x, y, z } in machine mm, any subset
+    const parts = Object.entries(p).filter(([, v]) => Number.isFinite(v)).map(([k, v]) => k.toUpperCase() + v.toFixed(3));
+    if (!parts.length) return;
+    await stageSend('G90 G0 ' + parts.join(' ')); await stageIdle();
+  }
+  function stageClosed() {
+    clearInterval(rig.poll); rig.poll = null; rig.reader = rig.writer = null; rig.port = null;
+    $('stageCtl').hidden = true; $('stageConnectBtn').textContent = 'Connect stage'; $('stageStatus').textContent = 'Not connected';
+  }
+  $('stageConnectBtn').onclick = async () => {
+    if (rig.port) { try { await rig.reader.cancel(); } catch {} try { rig.writer.releaseLock(); await rig.port.close(); } catch {} stageClosed(); return; }
+    try {
+      const port = await navigator.serial.requestPort(); await port.open({ baudRate: 115200 });
+      rig.port = port; rig.writer = port.writable.getWriter(); rig.reader = port.readable.getReader();
+      stageReadLoop(); rig.poll = setInterval(() => { if (!rig.busy) stageRaw('?').catch(() => {}); }, 300);
+      $('stageCtl').hidden = false; $('stageConnectBtn').textContent = 'Disconnect';
+      stageMsg('Waiting for GRBL…'); await stageRaw('\r\n\r\n');
+    } catch (e) { stageMsg('Could not open the port: ' + e.message); }
+  };
+  async function stageRun(btn, fn) {
+    if (rig.busy) return; rig.busy = true; if (btn) btn.disabled = true;
+    try { await fn(); } catch (e) { stageMsg(e.message); } finally { rig.busy = false; if (btn) btn.disabled = false; }
+  }
+  $('stageHomeBtn').onclick = e => stageRun(e.target, async () => { stageMsg('Homing…'); await stageSend('$H'); await stageIdle(); stageMsg('Homed. Zero is at the limit switches.'); });
+  $('stageUnlockBtn').onclick = () => stageSend('$X').then(() => stageMsg('Unlocked (not homed: positions start from here).')).catch(e => stageMsg(e.message));
+  $('stageStopBtn').onclick = async () => { rig.scanStop = true; await stageRaw('\x85'); await stageRaw('!'); await sleepMs(200); await stageRaw('\x18'); stageMsg('Stopped. Press Home or Unlock.'); rig.busy = false; };
+  // Jog (as in MicroScanner's jog buttons): a click moves one step; holding for 600 ms starts a continuous jog that
+  // stops the moment the button is released (GRBL jog-cancel, 0x85). Arrow keys jog X/Y, Page Up/Down jog Z.
+  const jogStep = (ax, dir) => stageSend(`$J=G91 G21 ${ax}${(dir * parseFloat($('stageStep').value)).toFixed(3)} F${FEED[ax]}`).catch(e => stageMsg(e.message));
+  for (const b of document.querySelectorAll('[data-jog]')) {
+    const ax = b.dataset.jog[0], dir = Math.sign(parseFloat(b.dataset.jog.slice(1)));
+    let timer = null, holding = false;
+    b.addEventListener('pointerdown', e => {
+      if (rig.busy || !rig.port) return; e.preventDefault(); b.setPointerCapture(e.pointerId); holding = false;
+      timer = setTimeout(() => { holding = true; stageSend(`$J=G91 G21 ${ax}${dir * 200} F${FEED[ax]}`).catch(() => {}); }, 600);
+    });
+    const release = () => { if (timer === null) return; clearTimeout(timer); timer = null; if (holding) { stageRaw('\x85'); holding = false; } else jogStep(ax, dir); };
+    b.addEventListener('pointerup', release); b.addEventListener('pointercancel', release);
+  }
+  document.addEventListener('keydown', e => {
+    if (!rig.port || rig.busy || e.repeat || /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    const k = { ArrowLeft: ['X', -1], ArrowRight: ['X', 1], ArrowUp: ['Y', 1], ArrowDown: ['Y', -1], PageUp: ['Z', 1], PageDown: ['Z', -1] }[e.key];
+    if (k) { e.preventDefault(); jogStep(...k); }
+  });
+  function stageTag() {   // machine position in the photo's file name, for stitching
+    return rig && rig.port ? `_X${rig.pos[0].toFixed(2)}_Y${rig.pos[1].toFixed(2)}_Z${rig.pos[2].toFixed(3)}` : '';
+  }
+  $('stageHereBtn').onclick = () => { $('stageStartX').value = rig.pos[0].toFixed(2); };
+  // Focus score: variance of the Laplacian of a lightly blurred grey ROI (MicroScanner's LoG metric), averaged over two
+  // frames so camera noise doesn't pick the peak. Higher = sharper.
+  function varLaplacian() {
+    const v = $('video'), w = 640, h = Math.round(640 * v.videoHeight / v.videoWidth);
+    const c = varLaplacian.c || (varLaplacian.c = document.createElement('canvas')); c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(v, 0, 0, w, h);
+    const x0 = Math.round(w * 0.2), y0 = Math.round(h * 0.2), cw = Math.round(w * 0.6), ch = Math.round(h * 0.6);
+    const d = ctx.getImageData(x0, y0, cw, ch).data, g = new Float32Array(cw * ch), b = new Float32Array(cw * ch);
+    for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2];
+    for (let y = 1; y < ch - 1; y++) for (let x = 1; x < cw - 1; x++) { const i = y * cw + x; b[i] = (4 * g[i] + g[i - 1] + g[i + 1] + g[i - cw] + g[i + cw]) / 8; }
+    let s = 0, s2 = 0, n = 0;
+    for (let y = 2; y < ch - 2; y++) for (let x = 2; x < cw - 2; x++) { const i = y * cw + x, l = 4 * b[i] - b[i - 1] - b[i + 1] - b[i - cw] - b[i + cw]; s += l; s2 += l * l; n++; }
+    return s2 / n - (s / n) ** 2;
+  }
+  const focusScore = async () => { const a = varLaplacian(); await sleepMs(80); return (a + varLaplacian()) / 2; };
+  async function stageAutofocus(range) {
+    if (!stream || !$('video').videoWidth) throw new Error('Start the camera first.');
+    const settle = 300, z0 = rig.pos[2], score = async z => { await stageMoveTo({ z }); await sleepMs(settle); return focusScore(); };
+    // Every sweep runs upward from below its range (backlash taken up the same way each time) and stops early once the
+    // score has dropped 3 times in a row past the peak; n caps the steps.
+    const sweep = async (lo, hi, n) => {
+      await stageMoveTo({ z: lo - 0.2 });
+      let best = lo, bs = -1, drops = 0;
+      for (let i = 0; i <= n; i++) {
+        const z = lo + (hi - lo) * i / n, v = await score(z); stageMsg(`Focus Z ${z.toFixed(3)}: sharpness ${v.toFixed(0)}`);
+        if (v > bs) { bs = v; best = z; drops = 0; } else if (++drops >= 3 && i >= 4) break;
+      }
+      return { best, bs };
+    };
+    const c = await sweep(z0 - range, z0 + range, 10), step = range / 5;
+    const f = await sweep(c.best - step, c.best + step, 8);
+    await stageMoveTo({ z: f.best - 0.2 }); await stageMoveTo({ z: f.best });
+    stageMsg(`Focus at Z ${f.best.toFixed(3)} (sharpness ${f.bs.toFixed(1)}).`);
+  }
+  $('stageAfBtn').onclick = e => stageRun(e.target, () => stageAutofocus(parseFloat($('stageAfRange').value) || 1));
+  // Scan: the remaining shots of this side, X stepped from the start, autofocus, then the normal Capture.
+  $('stageScanBtn').onclick = e => stageRun(e.target, async () => {
+    if (!stream || !$('video').videoWidth) throw new Error('Start the camera first.');
+    const x0 = parseFloat($('stageStartX').value), dx = parseFloat($('stageStepX').value);
+    if (!Number.isFinite(x0) || !(dx > 0)) throw new Error('Set the scan start and the X step.');
+    rig.scanStop = false; let n = 0, side = null;
+    while (!rig.scanStop) {
+      const shot = nextShot(podId); if (!shot) break;
+      const k = parseInt(shot.slice(1), 10) - 1;
+      if (side === null) side = shot[0]; else if (shot[0] !== side || k === 0) break;   // this side is done
+      stageMsg(`Shot ${shot}: moving to X ${(x0 + k * dx).toFixed(2)}…`);
+      await stageMoveTo({ x: x0 + k * dx });
+      if ($('stageScanAf').checked) await stageAutofocus(Math.min(1, parseFloat($('stageAfRange').value) || 1));
+      await $('captureBtn').onclick(); while (capturing) await sleepMs(200);
+      n++;
+      if (k + 1 >= MARKS) break;
+    }
+    stageMsg(n ? `Scanned ${n} shot${n > 1 ? 's' : ''}. Flip the pod and press Side B next, then Scan again.` : 'Nothing to scan: this side is complete.');
+  });
+
   $('flipBtn').onclick = () => { if (flipped.has(podId)) flipped.delete(podId); else flipped.add(podId); renderShots(); renderCaptureBtn(); };
 
   // ---------- saving ----------
