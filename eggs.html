@@ -233,7 +233,7 @@
             <label class="check"><input type="checkbox" id="stageAutoStep" checked> X step from the calibration (30 % overlap)</label>
             <div class="row" style="margin-top:4px"><button class="small" id="stageCalBtn" title="With the pod in view: moves Y by 1 mm and back, and measures how far the pod moved in the picture">Calibrate (moves Y 1 mm)</button><span class="meta" id="stageCalNote" style="margin:0"></span></div>
             <label class="check"><input type="checkbox" id="stageScanAf" checked> Autofocus at every shot</label>
-            <label class="check"><input type="checkbox" id="stageStack"> Focus stack with Z: shoot at several heights, align, merge</label>
+            <label class="check"><input type="checkbox" id="stageStack" checked> Focus stack with Z: shoot at several heights, align, merge</label>
             <div class="field"><label for="stageStackStep">Stack step mm</label><input type="number" id="stageStackStep" value="0.1" min="0.02" max="1" step="0.02"></div>
             <div class="row"><button class="small" id="stageStackRangeBtn" title="With the pod in focus: sweeps Z and finds the heights where each part of the pod is sharpest">Find Z stack range</button></div>
             <p class="note" id="stageStackNote"></p>
@@ -401,7 +401,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-20b'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-20c'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -1664,7 +1664,7 @@ document.documentElement.lang = 'en';
   // The range is kept as offsets from the focus Z (where autofocus put it), so it follows the pod from shot to shot.
   let zStack = null;
   try { zStack = JSON.parse(localStorage.getItem('eggZStack') || 'null'); } catch {}
-  try { $('stageStack').checked = localStorage.getItem('eggZStackOn') === '1'; const v = localStorage.getItem('eggZStackStep'); if (v) $('stageStackStep').value = v; } catch {}
+  try { $('stageStack').checked = localStorage.getItem('eggZStackOn') !== '0'; const v = localStorage.getItem('eggZStackStep'); if (v) $('stageStackStep').value = v; } catch {}
   $('stageStack').onchange = () => { try { localStorage.setItem('eggZStackOn', $('stageStack').checked ? '1' : '0'); } catch {} };
   $('stageStackStep').onchange = () => { try { localStorage.setItem('eggZStackStep', $('stageStackStep').value); } catch {} };
   const zStackStep = () => Math.max(0.02, Math.min(1, parseFloat($('stageStackStep').value) || 0.1));
