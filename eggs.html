@@ -271,19 +271,18 @@
 
       <div class="panel">
         <h2>Overlap between shots</h2>
-        <label class="check"><input type="checkbox" id="autoOverlap"> Find the overlap by matching neighbouring shots</label>
-        <p class="note">Neighbouring shots of the same side overlap. Each overlap is split down the middle, so every
-          egg is counted once; shaded parts are not counted.</p>
+        <label class="check"><input type="checkbox" id="autoOverlap"> Match neighbouring shots automatically</label>
+        <p class="note">Each overlap is split down the middle, so every egg is counted once (shaded parts are not counted).</p>
         <p class="note" id="matchNote"></p>
-        <p class="note">Every clear match is remembered for its pair of shots, and used where a pair cannot be matched,
-          such as a short pod with only plain card in the overlap.</p>
-        <p class="note">Most exact: a dotted tray strip (<a href="tray_edge_strips.pdf" target="_blank">tray_edge_strips.pdf</a>, A4, printed at 100 %) stuck on the tray above and
-          below the pod, in view in every shot. Its dots move with the pod and are matched one by one.</p>
-        <div class="row"><button class="small" id="forgetBtn">Forget remembered overlaps</button></div>
-        <p class="note">Where no match is found (or matching is off), count between these edges for each shot:</p>
-        <div class="field"><label for="trimPos">Shot</label><select id="trimPos"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></div>
-        <div class="slider"><label for="trimL">Count from</label><output id="trimLOut"></output><input type="range" id="trimL" min="0" max="50" step="1"></div>
-        <div class="slider"><label for="trimR">Count to</label><output id="trimROut"></output><input type="range" id="trimR" min="50" max="100" step="1"></div>
+        <details style="margin-top:6px"><summary class="note" style="cursor:pointer">More</summary>
+          <p class="note">Good matches are remembered and reused where a pair cannot be matched. Clear them after changing the X step.
+            For the most exact matching, stick a dotted <a href="tray_edge_strips.pdf" target="_blank">tray strip</a> (A4, 100 %) above and below the pod.</p>
+          <div class="row"><button class="small" id="forgetBtn">Forget remembered overlaps</button></div>
+          <p class="note">Without a match, count between these edges:</p>
+          <div class="field"><label for="trimPos">Shot</label><select id="trimPos"><option value="1">1</option></select></div>
+          <div class="slider"><label for="trimL">Count from</label><output id="trimLOut"></output><input type="range" id="trimL" min="0" max="50" step="1"></div>
+          <div class="slider"><label for="trimR">Count to</label><output id="trimROut"></output><input type="range" id="trimR" min="50" max="100" step="1"></div>
+        </details>
       </div>
 
       <div class="panel">
@@ -398,7 +397,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-19d'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-20a'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
