@@ -212,7 +212,7 @@
           <div class="row"><button class="small" id="stageConnectBtn">Connect stage</button><span class="meta" id="stageStatus" style="margin:0">Not connected</span></div>
           <div id="stageCtl" hidden>
             <div class="row" style="margin-top:8px">
-              <button class="small" id="stageHomeBtn" title="Run every axis to its limit switch and set zero there">Home</button>
+              <button class="small" id="stageHomeBtn" title="Find the X and Y limit switches, set zero there, then come back to this position">Home</button>
               <button class="small" id="stageUnlockBtn" title="Clear an alarm without homing">Unlock</button>
               <button class="small" id="stageStopBtn" title="Stop all motion now">Stop</button>
             </div>
@@ -225,6 +225,9 @@
             </div>
             <div class="field"><label for="stageAfRange">Focus range ± mm</label><input type="number" id="stageAfRange" value="1" min="0.1" max="10" step="0.1"></div>
             <div class="row"><button class="small" id="stageAfBtn">Autofocus with Z</button></div>
+            <div class="field"><label for="stageMaxX">X limit mm (right of its switch)</label><input type="number" id="stageMaxX" value="300" min="10" max="400" step="1"></div>
+            <div class="field"><label for="stageMaxY">Y limit mm (back, before the column)</label><input type="number" id="stageMaxY" placeholder="set by Home" min="0" max="95" step="0.5"></div>
+            <div class="row"><button class="small" id="stageMaxYBtn" title="Make the tray's current position the furthest back it may go">Y limit = here</button></div>
             <div class="field"><label for="stageStartX">Scan start X mm</label><input type="number" id="stageStartX" value="0" step="0.1"></div>
             <div class="row"><button class="small" id="stageHereBtn">Use current X</button></div>
             <div class="field"><label for="stageStepX">X step per shot mm</label><input type="number" id="stageStepX" value="8" min="0.5" step="0.5"></div>
@@ -243,7 +246,7 @@
               <pre id="stageLog" style="margin:6px 0 0;max-height:180px;overflow:auto;font-size:12px;white-space:pre-wrap"></pre>
             </details>
           </div>
-          <p class="note" id="stageNote">Connect the Arduino by USB, press Connect stage and pick its port. After switching on, press Home (or Unlock).</p>
+          <p class="note" id="stageNote">Connect the Arduino by USB, press Connect stage and pick its port. After switching on, press Home: it finds the X and Y switches and sets the limits. Unlock moves without limits.</p>
           <p class="note">Jog: click for one step, hold for continuous movement. Keys: ← → move X, ↑ ↓ move Y, Page Up/Down move Z. Captured photos carry the stage position in their file name.</p>
         </div>
       </div>
@@ -315,7 +318,7 @@
         <h2>Detection</h2>
         <div class="slider">
           <label for="eggPx">Egg size (px across)</label><output id="eggPxOut"></output>
-          <input type="range" id="eggPx" min="2" max="24" step="0.5">
+          <input type="range" id="eggPx" min="2" max="60" step="0.5">
         </div>
         <div class="slider">
           <label for="contrast">Brighter than around it by</label><output id="contrastOut"></output>
@@ -326,7 +329,7 @@
           <input type="range" id="edge" min="0" max="4" step="0.25">
         </div>
         <div class="row"><button class="small" id="autoSizeBtn">Auto egg size</button><button class="small" id="defaultsBtn">Defaults</button></div>
-        <p class="note">Auto size is the photo width ÷ 660 (7 px on the Arducam 16MP on the rail), checked against eggs counted by eye. Changes recount every photo.</p>
+        <p class="note">Auto size is the photo width ÷ 660 (7 px on the Arducam 16MP on the rail), checked against eggs counted by eye. Photos taken with the stage use its calibration instead (an egg cap is taken as 0.1 mm across). Changes recount every photo.</p>
       </div>
 
       <div class="panel">
@@ -401,7 +404,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-21d'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-21e'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -443,7 +446,9 @@ document.documentElement.lang = 'en';
   const enqueue = fn => (queue = queue.then(fn, fn));
   // eggs on the pod rig (Arducam 16MP on the rail, 12 Nov) are about 7 px across in a 4656 px photo
   const autoPx = W => Math.max(2, Math.round(W / 660 * 2) / 2);
-  const eggPxFor = ph => settings.eggPx || autoPx(ph.origW || 1600);
+  const EGG_MM = 0.1;   // an Orius egg cap across, used with the stage's scale tag in the file name (_S<px per mm>)
+  const scalePx = ph => { const m = /_S(\d+)(?=[_.])/.exec(ph.name || ''); return m ? Math.max(2, Math.round(+m[1] * EGG_MM * 2) / 2) : 0; };
+  const eggPxFor = ph => settings.eggPx || scalePx(ph) || autoPx(ph.origW || 1600);
 
   // A short pod may need only 1 or 2 marks per side: "Side B next" (or any B shot already in) moves on to side B.
   const flipped = new Set();
@@ -1107,7 +1112,7 @@ document.documentElement.lang = 'en';
   // ---------- detection settings ----------
   function renderSettings() {
     const ph = selected && selected.bmp ? selected : null;
-    const px = settings.eggPx || (ph ? autoPx(ph.origW) : 3);
+    const px = settings.eggPx || (ph ? scalePx(ph) || autoPx(ph.origW) : 3);
     $('eggPx').value = px; $('eggPxOut').textContent = px + (settings.eggPx ? ' px' : ' px (auto)');
     $('contrast').value = settings.contrast; $('contrastOut').textContent = settings.contrast;
     $('edge').value = settings.edge; $('edgeOut').textContent = settings.edge;
@@ -1536,7 +1541,17 @@ document.documentElement.lang = 'en';
   // ---------- motorised stage: GRBL on an Arduino + CNC Shield, over Web Serial ----------
   // X moves the riser stack along the rails (the pod), Y moves the tray front-back, Z moves the microscope (focus).
   // Commands wait for GRBL's "ok"; '?' is polled for the state and machine position.
-  const rig = { port: null, writer: null, reader: null, buf: '', waiters: [], state: '', pos: [0, 0, 0], poll: null, busy: false };
+  const rig = { port: null, writer: null, reader: null, buf: '', waiters: [], state: '', pos: [0, 0, 0], poll: null, busy: false,
+    mpos: [0, 0, 0], zero: [0, 0, 0], goal: [0, 0, 0], homed: false, pins: '' };
+  // rig.pos is what the page works in: GRBL's machine position minus rig.zero. Home (below) finds the X and Y limit
+  // switches and puts zero 2 mm off them; from then on X stays in 0..X limit and Y in 0..Y limit, whatever asks for
+  // the move (jog, centring, scan). Z has no switch yet, so Z is not limited. Limits are kept in the browser.
+  const AX = { X: 0, Y: 1, Z: 2 };
+  const stageLim = { x: 300, y: null };
+  try { Object.assign(stageLim, JSON.parse(localStorage.getItem('eggStageLim') || '{}')); } catch {}
+  const limSave = () => { try { localStorage.setItem('eggStageLim', JSON.stringify(stageLim)); } catch {} $('stageMaxX').value = stageLim.x; $('stageMaxY').value = stageLim.y ?? ''; };
+  const limitOf = i => !rig.homed ? null : i === 0 ? [0, stageLim.x] : i === 1 ? [0, stageLim.y ?? 95] : null;
+  const clampAx = (i, v) => { const L = limitOf(i); return L ? Math.max(L[0], Math.min(L[1], v)) : v; };
   const FEED = { X: 150, Y: 60, Z: 30 };     // the mini slides stall above ~120 mm/min (seller: 0-120)
   if (!('serial' in navigator)) { $('stageNoSerial').hidden = false; $('stageBody').hidden = true; }
   const enc = new TextEncoder(), dec = new TextDecoder();
@@ -1546,12 +1561,14 @@ document.documentElement.lang = 'en';
     line = line.trim(); if (!line) return;
     if (line[0] === '<') {
       const m = line.slice(1, -1).split('|'); rig.state = m[0];
-      const mp = m.find(f => f.startsWith('MPos:')); if (mp) rig.pos = mp.slice(5).split(',').map(Number);
-      $('stageStatus').textContent = `${rig.state} · X ${rig.pos[0].toFixed(2)} Y ${rig.pos[1].toFixed(2)} Z ${rig.pos[2].toFixed(3)}`;
+      const mp = m.find(f => f.startsWith('MPos:')); if (mp) { rig.mpos = mp.slice(5).split(',').map(Number); rig.pos = rig.mpos.map((v, i) => v - rig.zero[i]); }
+      const pn = m.find(f => f.startsWith('Pn:')); rig.pins = pn ? pn.slice(3) : '';
+      if (rig.state === 'Idle') rig.goal = rig.pos.slice();
+      $('stageStatus').textContent = `${rig.state} · X ${rig.pos[0].toFixed(2)} Y ${rig.pos[1].toFixed(2)} Z ${rig.pos[2].toFixed(3)} · ${rig.homed ? 'homed' : 'not homed'}`;
       return;
     }
     if (line === 'ok' || line.startsWith('error')) { const w = rig.waiters.shift(); if (w) (line === 'ok' ? w.ok() : w.fail(new Error('GRBL ' + line))); return; }
-    if (line.startsWith('ALARM')) { stageMsg(`${line}: press Home, or Unlock to move without homing.`); for (const w of rig.waiters.splice(0)) w.fail(new Error(line)); return; }
+    if (line.startsWith('ALARM')) { rig.homed = false; stageMsg(`${line}: a limit switch was hit or the stage was stopped. Press Home (or Unlock, then jog away from the switch).`); for (const w of rig.waiters.splice(0)) w.fail(new Error(line)); return; }
     if (line.startsWith('Grbl')) { stageMsg(`Connected: ${line}. Press Home (or Unlock).`); for (const w of rig.waiters.splice(0)) w.fail(new Error('reset')); }
     stageLog(line);
   }
@@ -1575,13 +1592,13 @@ document.documentElement.lang = 'en';
     for (let t = 0; t < 1200; t++) { await stageRaw('?'); await sleepMs(100); if (rig.state === 'Idle') return; if (/Alarm|Door/.test(rig.state)) throw new Error('Stage ' + rig.state); }
     throw new Error('The stage did not stop moving.');
   }
-  async function stageMoveTo(p) {   // p: { x, y, z } in machine mm, any subset
-    const parts = Object.entries(p).filter(([, v]) => Number.isFinite(v)).map(([k, v]) => k.toUpperCase() + v.toFixed(3));
+  async function stageMoveTo(p) {   // p: { x, y, z } in page mm (see rig.pos), any subset; kept inside the limits
+    const parts = Object.entries(p).filter(([, v]) => Number.isFinite(v)).map(([k, v]) => { const i = AX[k.toUpperCase()]; return k.toUpperCase() + (clampAx(i, v) + rig.zero[i]).toFixed(3); });
     if (!parts.length) return;
     await stageSend('G90 G0 ' + parts.join(' ')); await stageIdle();
   }
   function stageClosed() {
-    clearInterval(rig.poll); rig.poll = null; rig.reader = rig.writer = null; rig.port = null;
+    clearInterval(rig.poll); rig.poll = null; rig.reader = rig.writer = null; rig.port = null; rig.homed = false; rig.zero = [0, 0, 0];
     $('stageCtl').hidden = true; $('stageConnectBtn').textContent = 'Connect stage'; $('stageStatus').textContent = 'Not connected';
   }
   $('stageConnectBtn').onclick = async () => {
@@ -1598,18 +1615,63 @@ document.documentElement.lang = 'en';
     if (rig.busy) return; rig.busy = true; if (btn) btn.disabled = true;
     try { await fn(); } catch (e) { stageMsg(e.message); } finally { rig.busy = false; if (btn) btn.disabled = false; }
   }
-  $('stageHomeBtn').onclick = e => stageRun(e.target, async () => { stageMsg('Homing…'); await stageSend('$H'); await stageIdle(); stageMsg('Homed. Zero is at the limit switches.'); });
+  // Home, done by the page (GRBL's own $H needs a switch on every axis; Z has none yet): each axis jogs slowly towards
+  // its switch while the status is polled, stops the moment the switch reads pressed, and backs off until it is free
+  // plus 2 mm. That point is zero. Hard limits ($21) are off while seeking and on afterwards, as a backstop: a switch
+  // touched later stops everything at once.
+  async function seekSwitch(ax, dist) {
+    const pressed = async () => { await stageRaw('?'); await sleepMs(120); return rig.pins.includes(ax); };
+    const off = async mm => { await stageSend(`$J=G91 G21 ${ax}${mm} F${FEED[ax]}`); await stageIdle(); };
+    if (await pressed()) { await off(4); if (await pressed()) throw new Error(`The ${ax} switch stays pressed: check it and its cable.`); }
+    await stageSend(`$J=G91 G21 ${ax}-${dist} F${FEED[ax]}`);
+    let hit = false;
+    for (let t = 0; t < 3500 && !hit; t++) {
+      await stageRaw('?'); await sleepMs(60);
+      if (rig.pins.includes(ax)) hit = true; else if (t > 8 && rig.state === 'Idle') break; else if (/Alarm/.test(rig.state)) throw new Error('Stage ' + rig.state);
+    }
+    await stageRaw('\x85'); await stageIdle();
+    if (!hit) throw new Error(`${ax} did not reach its switch: is the 12 V on and the switch in place?`);
+    for (let k = 0; k < 8 && await pressed(); k++) await off(1);
+    if (await pressed()) throw new Error(`The ${ax} switch did not release.`);
+    await off(2);
+  }
+  $('stageHomeBtn').onclick = e => stageRun(e.target, async () => {
+    try { await stageSend('$X'); } catch {}
+    await stageRaw('?'); await sleepMs(250);
+    const back = rig.mpos.slice();
+    rig.homed = false; await stageSend('$21=0');
+    stageMsg('Homing Y: forwards to its switch…'); await seekSwitch('Y', 100);
+    stageMsg('Homing X: left to its switch…'); await seekSwitch('X', 420);
+    await stageRaw('?'); await sleepMs(250);
+    rig.zero = [rig.mpos[0], rig.mpos[1], 0]; rig.pos = [0, 0, rig.mpos[2]]; rig.homed = true;
+    await stageSend('$21=1');
+    const rx = back[0] - rig.zero[0], ry = back[1] - rig.zero[1];
+    if (stageLim.y == null) { stageLim.y = +(Math.max(0, ry) + 1).toFixed(1); limSave(); }   // first time: it was safe where it stood
+    stageMsg('Homed. Going back to where it was…'); await stageMoveTo({ x: rx, y: ry });
+    stageMsg(`Homed. Limits: X 0–${stageLim.x} mm, Y 0–${stageLim.y} mm from the switches (Z has no switch yet).`);
+  });
+  limSave();
+  $('stageMaxX').onchange = () => { const v = parseFloat($('stageMaxX').value); if (v > 0) stageLim.x = v; limSave(); };
+  $('stageMaxY').onchange = () => { const v = parseFloat($('stageMaxY').value); stageLim.y = Number.isFinite(v) && v >= 0 ? v : null; limSave(); };
+  $('stageMaxYBtn').onclick = () => { if (!rig.homed) { stageMsg('Press Home first.'); return; } stageLim.y = +rig.pos[1].toFixed(1); limSave(); stageMsg(`Y limit set to ${stageLim.y} mm.`); };
   $('stageUnlockBtn').onclick = () => stageSend('$X').then(() => stageMsg('Unlocked (not homed: positions start from here).')).catch(e => stageMsg(e.message));
   $('stageStopBtn').onclick = async () => { rig.scanStop = true; await stageRaw('\x85'); await stageRaw('!'); await sleepMs(200); await stageRaw('\x18'); stageMsg('Stopped. Press Home or Unlock.'); rig.busy = false; };
   // Jog (as in MicroScanner's jog buttons): a click moves one step; holding for 600 ms starts a continuous jog that
   // stops the moment the button is released (GRBL jog-cancel, 0x85). Arrow keys jog X/Y, Page Up/Down jog Z.
-  const jogStep = (ax, dir) => stageSend(`$J=G91 G21 ${ax}${(dir * parseFloat($('stageStep').value)).toFixed(3)} F${FEED[ax]}`).catch(e => stageMsg(e.message));
+  // Every jog is cut short at the axis limit (after Home). rig.goal follows jogs still on their way.
+  const jogBy = (ax, d) => {
+    const i = AX[ax], from = rig.state === 'Idle' ? rig.pos[i] : rig.goal[i], to = clampAx(i, from + d), dd = to - from;
+    if (Math.abs(dd) < 0.005) { stageMsg(`${ax} is at its limit.`); return Promise.resolve(false); }
+    rig.goal[i] = to; rig.state = 'Jog';
+    return stageSend(`$J=G91 G21 ${ax}${dd.toFixed(3)} F${FEED[ax]}`).then(() => true).catch(e => { stageMsg(e.message); return false; });
+  };
+  const jogStep = (ax, dir) => jogBy(ax, dir * parseFloat($('stageStep').value));
   for (const b of document.querySelectorAll('[data-jog]')) {
     const ax = b.dataset.jog[0], dir = Math.sign(parseFloat(b.dataset.jog.slice(1)));
     let timer = null, holding = false;
     b.addEventListener('pointerdown', e => {
       if (rig.busy || !rig.port) return; e.preventDefault(); b.setPointerCapture(e.pointerId); holding = false;
-      timer = setTimeout(() => { holding = true; stageSend(`$J=G91 G21 ${ax}${dir * 200} F${FEED[ax]}`).catch(() => {}); }, 600);
+      timer = setTimeout(() => { holding = true; jogBy(ax, dir * (limitOf(AX[ax]) ? 400 : 20)); }, 600);   // to the limit; 20 mm where there is none
     });
     const release = () => { if (timer === null) return; clearTimeout(timer); timer = null; if (holding) { stageRaw('\x85'); holding = false; } else jogStep(ax, dir); };
     b.addEventListener('pointerup', release); b.addEventListener('pointercancel', release);
@@ -1620,7 +1682,9 @@ document.documentElement.lang = 'en';
     if (k) { e.preventDefault(); jogStep(...k); }
   });
   function stageTag() {   // machine position in the photo's file name, for stitching
-    return rig && rig.port ? `_X${rig.pos[0].toFixed(2)}_Y${rig.pos[1].toFixed(2)}_Z${rig.pos[2].toFixed(3)}` : '';
+    if (!rig || !rig.port) return '';
+    const v = $('video'), sc = stageCal && stageCal.W === v.videoWidth ? `_S${Math.round(stageCal.pxPerMm)}` : '';   // picture scale, px per mm
+    return `_X${rig.pos[0].toFixed(2)}_Y${rig.pos[1].toFixed(2)}_Z${rig.pos[2].toFixed(3)}${sc}`;
   }
   // console: any GRBL command or setting; replies (and $$ listings) show in the log
   const sendTyped = () => { const c = $('stageCmd').value.trim(); if (!c || !rig.port) return; stageLog('> ' + c); stageSend(c).then(() => stageLog('ok')).catch(e => stageLog(e.message)); $('stageCmd').value = ''; };
@@ -1641,7 +1705,7 @@ document.documentElement.lang = 'en';
     return s2 / n - (s / n) ** 2;
   }
   const focusScore = async () => { const a = varLaplacian(); await sleepMs(80); return (a + varLaplacian()) / 2; };
-  async function stageAutofocus(range) {
+  async function stageAutofocus(range, quick) {   // quick: fewer steps, for the shots after the first of a scan
     if (!stream || !$('video').videoWidth) throw new Error('Start the camera first.');
     const settle = 300, z0 = rig.pos[2], score = async z => { await stageMoveTo({ z }); await sleepMs(settle); return focusScore(); };
     // Every sweep runs upward from below its range (backlash taken up the same way each time) and stops early once the
@@ -1655,8 +1719,8 @@ document.documentElement.lang = 'en';
       }
       return { best, bs };
     };
-    const c = await sweep(z0 - range, z0 + range, 10), step = range / 5;
-    const f = await sweep(c.best - step, c.best + step, 8);
+    const c = await sweep(z0 - range, z0 + range, quick ? 6 : 10), step = range / (quick ? 3 : 5);
+    const f = await sweep(c.best - step, c.best + step, quick ? 6 : 8);
     await stageMoveTo({ z: f.best - 0.2 }); await stageMoveTo({ z: f.best });
     stageMsg(`Focus at Z ${f.best.toFixed(3)} (sharpness ${f.bs.toFixed(1)}).`);
   }
@@ -1783,7 +1847,7 @@ document.documentElement.lang = 'en';
   // however much of the pod is in view. Gives the picture's direction and scale for 1 mm of Y.
   async function stageCalibrate() {
     if (!stream || !$('video').videoWidth) throw new Error('Start the camera first.');
-    const y0 = rig.pos[1], step = -2;   // forwards only: backwards (+Y) the tray can hit the column
+    const y0 = rig.pos[1], step = rig.homed && y0 < 2.2 ? 2 : -2;   // forwards (backwards the column is near), unless it sits at the front limit
     await nextFrame(); await sleepMs(200); const a = grabGray();
     await stageMoveTo({ y: y0 + step }); await sleepMs(500); await nextFrame(); const b = grabGray();
     await stageMoveTo({ y: y0 }); await sleepMs(300);
@@ -1824,8 +1888,8 @@ document.documentElement.lang = 'en';
       else move = -(tmin + tmax) / 2;
       const dyMm = Math.max(-10, Math.min(10, move / ppm));
       if (Math.abs(dyMm) < 0.1) return true;
-      const yT = Math.min(rig.pos[1] + dyMm, rig.yBackMax ?? Infinity);
-      if (Math.abs(yT - rig.pos[1]) < 0.1) return true;                  // already at the back limit
+      const yT = rig.homed ? clampAx(1, rig.pos[1] + dyMm) : Math.min(rig.pos[1] + dyMm, rig.yBackMax ?? Infinity);
+      if (Math.abs(yT - rig.pos[1]) < 0.1) return true;                  // already at a limit
       await stageMoveTo({ y: yT }); await sleepMs(300); await nextFrame();
     }
     return true;
@@ -1833,6 +1897,7 @@ document.documentElement.lang = 'en';
   // Scan: the remaining shots of this side, X stepped from the start, autofocus, then the normal Capture.
   $('stageScanBtn').onclick = e => stageRun(e.target, async () => {
     if (!stream || !$('video').videoWidth) throw new Error('Start the camera first.');
+    if (!rig.homed) throw new Error('Press Home first: it finds the X and Y switches, so the scan stays inside the limits.');
     const centre = $('stageCentre').checked;
     if (centre && !stageCal) await stageCalibrate();
     if (stageCal && $('stageAutoStep').checked) $('stageStepX').value = autoStepX().toFixed(1);
@@ -1843,15 +1908,19 @@ document.documentElement.lang = 'en';
       const shot = nextShot(podId); if (!shot) break;
       const k = parseInt(shot.slice(1), 10) - 1;
       if (side === null) side = shot[0]; else if (shot[0] !== side || k === 0) break;   // this side is done
-      stageMsg(`Shot ${shot}: moving to X ${(x0 + k * dx).toFixed(2)}…`);
-      await stageMoveTo({ x: x0 + k * dx }); await sleepMs(250);
+      const xT = x0 + k * dx;
+      if (xT < -0.01 || xT > stageLim.x + 0.01) { stageMsg(`X ${xT.toFixed(1)} mm is outside the limit (0–${stageLim.x}): the scan stops here.`); break; }
+      stageMsg(`Shot ${shot}: moving to X ${xT.toFixed(2)}…`);
+      await stageMoveTo({ x: xT }); await sleepMs(250);
       if (centre && !await stageCentrePod()) { if (n) { stageMsg('The pod ends here.'); break; } throw new Error('No pod in view at the start: move X (and Y) until it is.'); }
-      if ($('stageScanAf').checked) await stageAutofocus(Math.min(1, parseFloat($('stageAfRange').value) || 1));
+      if ($('stageScanAf').checked) { const r = Math.min(1, parseFloat($('stageAfRange').value) || 1); await stageAutofocus(n ? Math.min(r, 0.6) : r, n > 0); }
       await $('captureBtn').onclick(); while (capturing) await sleepMs(200);
       n++;
       if (k + 1 >= MARKS) break;
     }
-    stageMsg(n ? `Scanned ${n} shot${n > 1 ? 's' : ''}. Flip the pod and press Side B next, then Scan again.` : 'Nothing to scan: this side is complete.');
+    const end = $('stageNote').textContent;
+    if (n && !rig.scanStop) await stageMoveTo({ x: x0 });   // back to the start, ready for the other side
+    stageMsg(n ? `Scanned ${n} shot${n > 1 ? 's' : ''}${/ends here|outside the limit/.test(end) ? ' (' + end + ')' : ''}. Flip the pod and press Side B next, then Scan again.` : 'Nothing to scan: this side is complete.');
   });
 
   $('flipBtn').onclick = () => { if (flipped.has(podId)) flipped.delete(podId); else flipped.add(podId); renderShots(); renderCaptureBtn(); };
