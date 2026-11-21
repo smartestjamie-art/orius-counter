@@ -404,7 +404,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-21j'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-21k'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -1366,7 +1366,8 @@ document.documentElement.lang = 'en';
     return new Promise((resolve, reject) => { msg.seq = ++stackSeq; stackPending.set(msg.seq, { resolve, reject }); stackWorker.postMessage(msg); });
   }
   $('stackToggle').onchange = () => { try { localStorage.setItem('eggStack', $('stackToggle').checked ? '1' : '0'); } catch {} };
-  const nextFrame = () => new Promise(r => video.requestVideoFrameCallback ? video.requestVideoFrameCallback(() => r()) : setTimeout(r, 120));
+  // the next camera frame; never waits more than 0.4 s (no frame callbacks come while the live view is hidden behind a photo)
+  const nextFrame = () => new Promise(r => { const t = setTimeout(r, 400); if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => { clearTimeout(t); r(); }); });
   function grabCanvas() {
     const c = document.createElement('canvas'); c.width = video.videoWidth; c.height = video.videoHeight;
     c.getContext('2d', { willReadFrequently: true }).drawImage(video, 0, 0);
