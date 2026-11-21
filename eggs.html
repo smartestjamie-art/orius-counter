@@ -234,7 +234,7 @@
             <div class="field"><label for="stageShots">Shots per side</label><select id="stageShots"></select></div>
             <label class="check"><input type="checkbox" id="stageCentre" checked> Keep the pod centred with Y, and stop where the pod ends</label>
             <label class="check"><input type="checkbox" id="stageAutoStep" checked> X step from the calibration (30 % overlap)</label>
-            <div class="row" style="margin-top:4px"><button class="small" id="stageCalBtn" title="With the pod in view: moves Y by 1 mm and back, and measures how far the pod moved in the picture">Calibrate (moves Y 1 mm)</button><span class="meta" id="stageCalNote" style="margin:0"></span></div>
+            <div class="row" style="margin-top:4px"><button class="small" id="stageCalBtn" title="With the pod in view: moves Y by 1 mm and back, and measures how far the pod moved in the picture">Calibrate (moves X and Y 3 mm)</button><span class="meta" id="stageCalNote" style="margin:0"></span></div>
             <label class="check"><input type="checkbox" id="stageScanAf" checked> Autofocus at every shot</label>
             <label class="check"><input type="checkbox" id="stageStack" checked> Focus stack with Z: shoot at several heights, align, merge</label>
             <div class="field"><label for="stageStackStep">Stack step mm</label><input type="number" id="stageStackStep" value="0.1" min="0.02" max="1" step="0.02"></div>
@@ -404,7 +404,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-21h'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-21i'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -1716,16 +1716,22 @@ document.documentElement.lang = 'en';
   // Focus score: variance of the Laplacian of a lightly blurred grey ROI (MicroScanner's LoG metric), averaged over two
   // frames so camera noise doesn't pick the peak. Higher = sharper.
   function varLaplacian() {
+    // Sharpness of the POD only (green pixels): the board's printed grid is far more contrasty than the pod and lies
+    // several mm lower, so scoring the whole picture can focus on the board. With hardly any pod in view, all pixels count.
     const v = $('video'), w = 640, h = Math.round(640 * v.videoHeight / v.videoWidth);
     const c = varLaplacian.c || (varLaplacian.c = document.createElement('canvas')); c.width = w; c.height = h;
     const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(v, 0, 0, w, h);
-    const x0 = Math.round(w * 0.2), y0 = Math.round(h * 0.2), cw = Math.round(w * 0.6), ch = Math.round(h * 0.6);
-    const d = ctx.getImageData(x0, y0, cw, ch).data, g = new Float32Array(cw * ch), b = new Float32Array(cw * ch);
-    for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2];
-    for (let y = 1; y < ch - 1; y++) for (let x = 1; x < cw - 1; x++) { const i = y * cw + x; b[i] = (4 * g[i] + g[i - 1] + g[i + 1] + g[i - cw] + g[i + cw]) / 8; }
+    const d = ctx.getImageData(0, 0, w, h).data, g = new Float32Array(w * h), b = new Float32Array(w * h), pod = new Uint8Array(w * h);
+    let np = 0;
+    for (let i = 0, j = 0; i < g.length; i++, j += 4) { g[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2]; if (d[j + 1] > d[j] + 10 && d[j + 1] > d[j + 2] + 10) { pod[i] = 1; np++; } }
+    const all = np < 0.05 * g.length;
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) { const i = y * w + x; b[i] = (4 * g[i] + g[i - 1] + g[i + 1] + g[i - w] + g[i + w]) / 8; }
     let s = 0, s2 = 0, n = 0;
-    for (let y = 2; y < ch - 2; y++) for (let x = 2; x < cw - 2; x++) { const i = y * cw + x, l = 4 * b[i] - b[i - 1] - b[i + 1] - b[i - cw] - b[i + cw]; s += l; s2 += l * l; n++; }
-    return s2 / n - (s / n) ** 2;
+    for (let y = 4; y < h - 4; y++) for (let x = 4; x < w - 4; x++) {
+      const i = y * w + x; if (!all && !(pod[i] && pod[i - 3] && pod[i + 3] && pod[i - 3 * w] && pod[i + 3 * w])) continue;   // well inside the pod: its outline does not count
+      const l = 4 * b[i] - b[i - 1] - b[i + 1] - b[i - w] - b[i + w]; s += l; s2 += l * l; n++;
+    }
+    return n ? s2 / n - (s / n) ** 2 : 0;
   }
   const focusScore = async () => { const a = varLaplacian(); await sleepMs(80); return (a + varLaplacian()) / 2; };
   async function stageAutofocus(range, quick) {   // quick: fewer steps, for the shots after the first of a scan
@@ -1913,7 +1919,10 @@ document.documentElement.lang = 'en';
         const t = dx * px + dy * py; if (t < fmin) fmin = t; if (t > fmax) fmax = t;
         if (d[j + 1] > d[j] + 10 && d[j + 1] > d[j + 2] + 10) { n++; if (t < tmin) tmin = t; if (t > tmax) tmax = t; }
       }
-      if (n < 20) return false;                                           // no pod across the middle
+      if (n < 20) {                                                       // no pod across the middle of the picture
+        let gAll = 0; for (let j = 0; j < d.length; j += 4) if (d[j + 1] > d[j] + 10 && d[j + 1] > d[j + 2] + 10) gAll++;
+        return gAll > 0.01 * w * h ? 'tail' : false;                       // some pod at the side: its tail is in this picture
+      }
       // An edge counts as seen when board shows beyond it (the green stops well inside the frame).
       const edge = 0.04 * (fmax - fmin), lowCut = tmin < fmin + edge, highCut = tmax > fmax - edge, span = fmax - fmin;
       let move;                                                           // how far to shift the pod along +t, 160-px units
@@ -1935,6 +1944,15 @@ document.documentElement.lang = 'en';
     }
     return true;
   }
+  // Is the pod still running out of the picture on the side the view is travelling to? (false: it ends in this picture)
+  function podRunsOn() {
+    const v = $('video'), w = 160, h = Math.round(160 * v.videoHeight / v.videoWidth);
+    const c = podCentre.c3 || (podCentre.c3 = document.createElement('canvas')); c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(v, 0, 0, w, h);
+    const d = ctx.getImageData(0, 0, w, h).data, left = stageCal.xu > 0, x0 = left ? 0 : w - 8;   // X+ moves the picture's content right: the view goes left
+    let n = 0; for (let y = 0; y < h; y++) for (let x = x0; x < x0 + 8; x++) { const j = (y * w + x) * 4; if (d[j + 1] > d[j] + 10 && d[j + 1] > d[j + 2] + 10) n++; }
+    return n > 0.03 * 8 * h;
+  }
   // Scan: the remaining shots of this side, X stepped from the start, autofocus, then the normal Capture.
   $('stageScanBtn').onclick = e => stageRun(e.target, async () => {
     if (!stream || !$('video').videoWidth) throw new Error('Start the camera first.');
@@ -1953,11 +1971,14 @@ document.documentElement.lang = 'en';
       if (xT < -0.01 || xT > stageLim.x + 0.01) { stageMsg(`X ${xT.toFixed(1)} mm is outside the limit (0–${stageLim.x}): the scan stops here.`); break; }
       stageMsg(`Shot ${shot}: moving to X ${xT.toFixed(2)}…`);
       await stageMoveTo({ x: xT }); await sleepMs(250);
-      if (centre && !await stageCentrePod()) { if (n) { stageMsg('The pod ends here.'); break; } throw new Error('No pod in view at the start: move X (and Y) until it is.'); }
-      if ($('stageScanAf').checked) { const r = Math.min(1, parseFloat($('stageAfRange').value) || 1); await stageAutofocus(n ? Math.min(r, 0.6) : r, n > 0); }
+      const seen = centre ? await stageCentrePod() : true;
+      if (!seen) { if (n) { stageMsg('The pod ends here.'); break; } throw new Error('No pod in view at the start: move X (and Y) until it is.'); }
+      if ($('stageScanAf').checked) { const r = Math.min(1, parseFloat($('stageAfRange').value) || 1); await stageAutofocus(n ? Math.min(r, 0.8) : r, n > 0); }
       await $('captureBtn').onclick(); while (capturing) await sleepMs(200);
       n++;
-      if (k + 1 >= MARKS) break;
+      await nextFrame();
+      if (centre && (seen === 'tail' || !podRunsOn())) { stageMsg('The pod ends here.'); break; }   // its tail is in this shot
+      if (k + 1 >= MARKS) { stageMsg('outside the limit: more shots per side are needed for this pod.'); break; }
     }
     const end = $('stageNote').textContent;
     if (n && !rig.scanStop) await stageMoveTo({ x: x0 });   // back to the start, ready for the other side
