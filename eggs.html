@@ -406,7 +406,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-21n'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-21o'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -1103,7 +1103,7 @@ document.documentElement.lang = 'en';
       btns.appendChild(rm);
       tr.append(name, n, btns);
       // open it on the stage, which is above the list: bring the stage into view
-      tr.onclick = () => { stopCamera(); select(ph); $('stage').scrollIntoView({ block: 'start' }); };
+      tr.onclick = () => { if (scanBusy()) return; stopCamera(); select(ph); $('stage').scrollIntoView({ block: 'start' }); };
       tr.title = 'Open on the stage';
       tb.appendChild(tr);
     }
@@ -1122,7 +1122,7 @@ document.documentElement.lang = 'en';
         tr.appendChild(c);
       }
       const t = document.createElement('td'); t.className = 'pods total'; t.textContent = podTotal(pod); tr.appendChild(t);
-      tr.onclick = () => { const p = podPhotos(pod)[0]; if (p) { stopCamera(); select(p); } };
+      tr.onclick = () => { if (scanBusy()) return; const p = podPhotos(pod)[0]; if (p) { stopCamera(); select(p); } };
       tb.appendChild(tr);
     }
     if (!pods.length) { const tr = document.createElement('tr'), c = document.createElement('td'); c.colSpan = 8; c.className = 'status'; c.textContent = 'No pods yet.'; tr.appendChild(c); tb.appendChild(tr); }
@@ -1197,6 +1197,8 @@ document.documentElement.lang = 'en';
     stopCamera(); files.forEach(f => addPhoto(f, f.name));
   });
 
+  // Opening a photo stops the camera; a running scan needs it. While the stage is busy, photos stay closed.
+  function scanBusy() { if (!rig.busy) return false; stageMsg($('stageNote').textContent.replace(/ \(photos open when the scan is done\)$/, '') + ' (photos open when the scan is done)'); return true; }
   // ---------- camera ----------
   const video = $('video'), framed = window.self !== window.top;
   if (!framed && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) $('cameraBtn').hidden = false;
@@ -2010,6 +2012,7 @@ document.documentElement.lang = 'en';
       const shot = nextShot(podId); if (!shot) break;
       const k = parseInt(shot.slice(1), 10) - 1;
       if (side === null) side = shot[0]; else if (shot[0] !== side || k === 0) break;   // this side is done
+      if (!stream) { stageMsg('The camera stopped: the scan ends here. Press Use camera, then Scan this side to go on.'); break; }
       const xT = x0 + k * dx;
       if (xT < -0.01 || xT > stageLim.x + 0.01) { stageMsg(`X ${xT.toFixed(1)} mm is outside the limit (0–${stageLim.x}): the scan stops here.`); break; }
       stageMsg(`Shot ${shot}: moving to X ${xT.toFixed(2)}…`);
