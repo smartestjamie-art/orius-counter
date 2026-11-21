@@ -401,7 +401,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-21a'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-21b'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -1757,29 +1757,72 @@ document.documentElement.lang = 'en';
     return 0.7 * extent / stageCal.pxPerMm;
   }
   calNote();
+  // Grey copy of the live picture, 160 px wide (small enough to compare quickly).
+  function grabGray() {
+    const v = $('video'), w = 160, h = Math.round(160 * v.videoHeight / v.videoWidth);
+    const c = grabGray.c || (grabGray.c = document.createElement('canvas')); c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(v, 0, 0, w, h);
+    const d = ctx.getImageData(0, 0, w, h).data, g = new Float32Array(w * h);
+    for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2];
+    return { g, w, h };
+  }
+  // How far the whole picture moved from a to b (in 160-px pixels): the shift with the smallest mean difference.
+  function pictureShift(a, b, R) {
+    const { w, h } = a; let best = Infinity, bx = 0, by = 0;
+    for (let sy = -R; sy <= R; sy++) for (let sx = -R; sx <= R; sx++) {
+      let sum = 0, n = 0;
+      for (let y = Math.max(0, -sy) + 4; y < Math.min(h, h - sy) - 4; y += 2) {
+        const ra = y * w, rb = (y + sy) * w + sx;
+        for (let x = Math.max(0, -sx) + 4; x < Math.min(w, w - sx) - 4; x += 2) { sum += Math.abs(a.g[ra + x] - b.g[rb + x]); n++; }
+      }
+      const m = sum / n; if (m < best) { best = m; bx = sx; by = sy; }
+    }
+    return { sx: bx, sy: by };
+  }
+  // Calibration: move Y by 2 mm and measure how the WHOLE picture moved (board texture and pod together), so it works
+  // however much of the pod is in view. Gives the picture's direction and scale for 1 mm of Y.
   async function stageCalibrate() {
     if (!stream || !$('video').videoWidth) throw new Error('Start the camera first.');
-    const a = podCentre(); if (a.frac < 0.02) throw new Error('Put the pod in view first.');
-    stageCal = null; const a0 = podCentre(); if (a0.frac > 0.85) throw new Error('The pod fills the picture: zoom out (or move Y) so some board shows, then calibrate.');
-    const y0 = rig.pos[1];
-    await stageMoveTo({ y: y0 + 1 }); await sleepMs(300); const b = podCentre();
+    const y0 = rig.pos[1], step = 2;
+    await nextFrame(); await sleepMs(200); const a = grabGray();
+    await stageMoveTo({ y: y0 + step }); await sleepMs(500); await nextFrame(); const b = grabGray();
     await stageMoveTo({ y: y0 }); await sleepMs(300);
-    const v = $('video'), du = b.cx - a.cx, dv = b.cy - a.cy, pxPerMm = Math.hypot(du * v.videoWidth, dv * v.videoHeight);
-    if (pxPerMm < 5) throw new Error('The pod did not move in the picture: check the Y motor and its cable.');
-    stageCal = { du, dv, pxPerMm, W: v.videoWidth, H: v.videoHeight, bright: a.frac < 0.85 ? a.p90 : null };
+    const s = pictureShift(a, b, 40), v = $('video');
+    const du = s.sx / a.w / step, dv = s.sy / a.h / step, pxPerMm = Math.hypot(du * v.videoWidth, dv * v.videoHeight);
+    if (Math.hypot(s.sx, s.sy) < 2) throw new Error('The picture did not move: check the Y motor (12 V, cable).');
+    stageCal = { du, dv, pxPerMm, W: v.videoWidth, H: v.videoHeight };
     try { localStorage.setItem('eggStageCal', JSON.stringify(stageCal)); } catch {}
     calNote(); if ($('stageAutoStep').checked) $('stageStepX').value = autoStepX().toFixed(1);
-    stageMsg(`Calibrated: ${pxPerMm.toFixed(0)} px per mm.`);
+    stageMsg(`Calibrated: ${pxPerMm.toFixed(0)} px per mm (picture moved ${s.sx}, ${s.sy} px for ${step} mm of Y).`);
   }
-  $('stageCalBtn').onclick = e => stageRun(e.target, stageCalibrate);
-  // Move Y so the pod's centre sits in the middle of the picture (twice, to settle); false when no pod is in view.
+  // Centre the pod across its width: along Y's direction in the picture, find the pod's two edges (green pixels) in a
+  // band through the middle. Both edges in view: move so their midpoint is in the middle. One edge cut off by the
+  // frame: step a third of the picture towards that side, then look again. Pod wider than the picture: leave it.
+  // Returns false when no pod is in view.
   async function stageCentrePod() {
-    for (let i = 0; i < 2; i++) {
-      const c = podCentre(); if (c.frac < 0.02) return false; if (c.frac > 0.9) return true;   // pod fills the picture: nothing to centre on
-      const ou = c.cx - 0.5, ov = c.cy - 0.5, n2 = stageCal.du ** 2 + stageCal.dv ** 2;
-      const dy = Math.max(-10, Math.min(10, -(ou * stageCal.du + ov * stageCal.dv) / n2));
-      if (Math.abs(dy) < 0.05) break;
-      await stageMoveTo({ y: rig.pos[1] + dy }); await sleepMs(250);
+    for (let i = 0; i < 4; i++) {
+      const v = $('video'), w = 160, h = Math.round(160 * v.videoHeight / v.videoWidth);
+      const c = podCentre.c2 || (podCentre.c2 = document.createElement('canvas')); c.width = w; c.height = h;
+      const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(v, 0, 0, w, h);
+      const d = ctx.getImageData(0, 0, w, h).data;
+      const ux = stageCal.du * w, uy = stageCal.dv * h, ppm = Math.hypot(ux, uy), dx = ux / ppm, dy = uy / ppm;   // Y's direction, 160-px units per mm
+      const band = 0.15 * Math.min(w, h);
+      let tmin = Infinity, tmax = -Infinity, fmin = Infinity, fmax = -Infinity, n = 0;
+      for (let y = 0, j = 0; y < h; y++) for (let x = 0; x < w; x++, j += 4) {
+        const px = x - w / 2, py = y - h / 2;
+        if (Math.abs(-dy * px + dx * py) > band) continue;            // outside the band through the middle
+        const t = dx * px + dy * py; if (t < fmin) fmin = t; if (t > fmax) fmax = t;
+        if (d[j + 1] > d[j] + 10 && d[j + 1] > d[j + 2] + 10) { n++; if (t < tmin) tmin = t; if (t > tmax) tmax = t; }
+      }
+      if (n < 20) return false;                                           // no pod across the middle
+      const lowCut = tmin < fmin + 3, highCut = tmax > fmax - 3, span = fmax - fmin;
+      let move;                                                           // how far to move the pod along +t, 160-px units
+      if (lowCut && highCut) return true;                                 // pod wider than the picture
+      else if (lowCut) move = span / 3; else if (highCut) move = -span / 3;
+      else move = -(tmin + tmax) / 2;
+      const dyMm = Math.max(-10, Math.min(10, move / ppm));
+      if (Math.abs(dyMm) < 0.1) return true;
+      await stageMoveTo({ y: rig.pos[1] + dyMm }); await sleepMs(300); await nextFrame();
     }
     return true;
   }
