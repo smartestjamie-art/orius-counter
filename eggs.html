@@ -1552,7 +1552,7 @@ document.documentElement.lang = 'en';
   const limSave = () => { try { localStorage.setItem('eggStageLim', JSON.stringify(stageLim)); } catch {} $('stageMaxX').value = stageLim.x; $('stageMaxY').value = stageLim.y ?? ''; };
   const limitOf = i => !rig.homed ? null : i === 0 ? [0, stageLim.x] : i === 1 ? [0, stageLim.y ?? 95] : null;
   const clampAx = (i, v) => { const L = limitOf(i); return L ? Math.max(L[0], Math.min(L[1], v)) : v; };
-  const FEED = { X: 600, Y: 200, Z: 100 };   // real mm/min (drivers at 1/4 step: $100=160, $101=$102=800). Z lifts the microscope: it stalls above ~120
+  const FEED = { X: 600, Y: 200, Z: 100 };   // real mm/min (drivers in full steps: $100=50, $101=$102=200). Z lifts the microscope: it stalls above ~120
   if (!('serial' in navigator)) { $('stageNoSerial').hidden = false; $('stageBody').hidden = true; }
   const enc = new TextEncoder(), dec = new TextDecoder();
   const stageMsg = t => { $('stageNote').textContent = t; };
