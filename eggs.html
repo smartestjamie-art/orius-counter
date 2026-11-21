@@ -404,7 +404,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-21e'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-21f'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -1552,7 +1552,7 @@ document.documentElement.lang = 'en';
   const limSave = () => { try { localStorage.setItem('eggStageLim', JSON.stringify(stageLim)); } catch {} $('stageMaxX').value = stageLim.x; $('stageMaxY').value = stageLim.y ?? ''; };
   const limitOf = i => !rig.homed ? null : i === 0 ? [0, stageLim.x] : i === 1 ? [0, stageLim.y ?? 95] : null;
   const clampAx = (i, v) => { const L = limitOf(i); return L ? Math.max(L[0], Math.min(L[1], v)) : v; };
-  const FEED = { X: 150, Y: 60, Z: 30 };     // the mini slides stall above ~120 mm/min (seller: 0-120)
+  const FEED = { X: 600, Y: 200, Z: 100 };   // real mm/min (drivers at 1/4 step: $100=160, $101=$102=800). Z lifts the microscope: it stalls above ~120
   if (!('serial' in navigator)) { $('stageNoSerial').hidden = false; $('stageBody').hidden = true; }
   const enc = new TextEncoder(), dec = new TextDecoder();
   const stageMsg = t => { $('stageNote').textContent = t; };
@@ -1564,7 +1564,7 @@ document.documentElement.lang = 'en';
       const mp = m.find(f => f.startsWith('MPos:')); if (mp) { rig.mpos = mp.slice(5).split(',').map(Number); rig.pos = rig.mpos.map((v, i) => v - rig.zero[i]); }
       const pn = m.find(f => f.startsWith('Pn:')); rig.pins = pn ? pn.slice(3) : '';
       if (rig.state === 'Idle') rig.goal = rig.pos.slice();
-      $('stageStatus').textContent = `${rig.state} · X ${rig.pos[0].toFixed(2)} Y ${rig.pos[1].toFixed(2)} Z ${rig.pos[2].toFixed(3)} · ${rig.homed ? 'homed' : 'not homed'}`;
+      $('stageStatus').textContent = `${rig.state} · X ${rig.pos[0].toFixed(2)} Y ${rig.pos[1].toFixed(2)} Z ${rig.pos[2].toFixed(3)} · ${rig.homed ? 'homed' : 'not homed'}${rig.pins ? ' · switch ' + rig.pins : ''}`;
       return;
     }
     if (line === 'ok' || line.startsWith('error')) { const w = rig.waiters.shift(); if (w) (line === 'ok' ? w.ok() : w.fail(new Error('GRBL ' + line))); return; }
@@ -1604,7 +1604,8 @@ document.documentElement.lang = 'en';
   $('stageConnectBtn').onclick = async () => {
     if (rig.port) { try { await rig.reader.cancel(); } catch {} try { rig.writer.releaseLock(); await rig.port.close(); } catch {} stageClosed(); return; }
     try {
-      const port = await navigator.serial.requestPort(); await port.open({ baudRate: 115200 });
+      const granted = await navigator.serial.getPorts();   // a port allowed before is reused without the chooser
+      const port = granted.length === 1 ? granted[0] : await navigator.serial.requestPort(); await port.open({ baudRate: 115200 });
       rig.port = port; rig.writer = port.writable.getWriter(); rig.reader = port.readable.getReader();
       stageReadLoop(); rig.poll = setInterval(() => { if (!rig.busy) stageRaw('?').catch(() => {}); }, 300);
       $('stageCtl').hidden = false; $('stageConnectBtn').textContent = 'Disconnect';
