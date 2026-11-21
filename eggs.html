@@ -401,7 +401,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-21b'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-21c'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -1795,6 +1795,7 @@ document.documentElement.lang = 'en';
     calNote(); if ($('stageAutoStep').checked) $('stageStepX').value = autoStepX().toFixed(1);
     stageMsg(`Calibrated: ${pxPerMm.toFixed(0)} px per mm (picture moved ${s.sx}, ${s.sy} px for ${step} mm of Y).`);
   }
+  $('stageCalBtn').onclick = e => stageRun(e.target, stageCalibrate);
   // Centre the pod across its width: along Y's direction in the picture, find the pod's two edges (green pixels) in a
   // band through the middle. Both edges in view: move so their midpoint is in the middle. One edge cut off by the
   // frame: step a third of the picture towards that side, then look again. Pod wider than the picture: leave it.
