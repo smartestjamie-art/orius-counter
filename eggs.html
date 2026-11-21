@@ -406,7 +406,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-21o'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-21p'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -607,7 +607,7 @@ document.documentElement.lang = 'en';
   // Pod pixel: yellow-green to brown, i.e. red and green both well above blue. (The pod under this microscope is
   // yellowish: green is only a few counts above red, so "green above red" missed most of it. The board and the printed
   // ruler are grey or black: their blue is as high as the rest.)
-  const isPod = (r, g, b) => Math.min(r, g) > 1.25 * b + 10;
+  const isPod = (r, g, b) => Math.min(r, g) > 1.25 * b + 10 && g > 0.8 * r;   // not brown or orange (the table past the board's end)
   const stagePos = ph => { const m = /_X(-?[\d.]+)_Y(-?[\d.]+)_Z(-?[\d.]+)_S(\d+)(?=[_.])/.exec(ph.name || ''); return m ? { x: +m[1], y: +m[2], s: +m[4] } : null; };
   function stageShift(a, b) {
     const pa = stagePos(a), pb = stagePos(b);
