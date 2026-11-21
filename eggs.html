@@ -404,7 +404,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-21f'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-21g'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -1867,6 +1867,7 @@ document.documentElement.lang = 'en';
   // frame: step a third of the picture towards that side, then look again. Pod wider than the picture: leave it.
   // Returns false when no pod is in view.
   async function stageCentrePod() {
+    let oneEdge = null;
     for (let i = 0; i < 4; i++) {
       const v = $('video'), w = 160, h = Math.round(160 * v.videoHeight / v.videoWidth);
       const c = podCentre.c2 || (podCentre.c2 = document.createElement('canvas')); c.width = w; c.height = h;
@@ -1882,13 +1883,21 @@ document.documentElement.lang = 'en';
         if (d[j + 1] > d[j] + 10 && d[j + 1] > d[j + 2] + 10) { n++; if (t < tmin) tmin = t; if (t > tmax) tmax = t; }
       }
       if (n < 20) return false;                                           // no pod across the middle
-      const lowCut = tmin < fmin + 3, highCut = tmax > fmax - 3, span = fmax - fmin;
-      let move;                                                           // how far to move the pod along +t, 160-px units
-      if (lowCut && highCut) return true;                                 // pod wider than the picture
-      else if (lowCut) move = span / 3; else if (highCut) move = -span / 3;
-      else move = -(tmin + tmax) / 2;
+      // An edge counts as seen when board shows beyond it (the green stops well inside the frame).
+      const edge = 0.04 * (fmax - fmin), lowCut = tmin < fmin + edge, highCut = tmax > fmax - edge, span = fmax - fmin;
+      let move;                                                           // how far to shift the pod along +t, 160-px units
+      if (lowCut && highCut) return true;                                 // the pod fills the frame across: nothing to do
+      if (!lowCut && !highCut) move = -(tmin + tmax) / 2;                 // both edges in view: put their midpoint in the middle
+      else {
+        // One edge in view, the other cut off: the pod is wider than what shows. Slide the visible edge out to 8 % from
+        // its own side of the frame, which brings in as much pod as fits. If the far edge then appears, the next
+        // pass centres on both; if the same edge is still the only one, the pod is wider than the frame: stop there.
+        if (oneEdge === (lowCut ? 'high' : 'low')) return true;
+        oneEdge = lowCut ? 'high' : 'low';
+        move = lowCut ? (fmax - 0.08 * span) - tmax : (fmin + 0.08 * span) - tmin;
+      }
       const dyMm = Math.max(-10, Math.min(10, move / ppm));
-      if (Math.abs(dyMm) < 0.1) return true;
+      if (Math.abs(dyMm) < 0.3) return true;
       const yT = rig.homed ? clampAx(1, rig.pos[1] + dyMm) : Math.min(rig.pos[1] + dyMm, rig.yBackMax ?? Infinity);
       if (Math.abs(yT - rig.pos[1]) < 0.1) return true;                  // already at a limit
       await stageMoveTo({ y: yT }); await sleepMs(300); await nextFrame();
