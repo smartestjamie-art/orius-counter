@@ -228,6 +228,8 @@
             <div class="field"><label for="stageMaxX">X limit mm (right of its switch)</label><input type="number" id="stageMaxX" value="300" min="10" max="400" step="1"></div>
             <div class="field"><label for="stageMaxY">Y limit mm (back, before the column)</label><input type="number" id="stageMaxY" placeholder="set by Home" min="0" max="95" step="0.5"></div>
             <div class="row"><button class="small" id="stageMaxYBtn" title="Make the tray's current position the furthest back it may go">Y limit = here</button></div>
+            <div class="field"><label for="stageZLo">Z lowest mm</label><input type="number" id="stageZLo" step="0.5"></div>
+            <div class="field"><label for="stageZHi">Z highest mm</label><input type="number" id="stageZHi" step="0.5"></div>
             <div class="field"><label for="stageStartX">Scan start X mm</label><input type="number" id="stageStartX" value="0" step="0.1"></div>
             <div class="row"><button class="small" id="stageHereBtn">Use current X</button></div>
             <div class="field"><label for="stageStepX">X step per shot mm</label><input type="number" id="stageStepX" value="8" min="0.5" step="0.5"></div>
@@ -404,7 +406,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-21l'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-21m'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -1574,10 +1576,12 @@ document.documentElement.lang = 'en';
   // switches and puts zero 2 mm off them; from then on X stays in 0..X limit and Y in 0..Y limit, whatever asks for
   // the move (jog, centring, scan). Z has no switch yet, so Z is not limited. Limits are kept in the browser.
   const AX = { X: 0, Y: 1, Z: 2 };
-  const stageLim = { x: 300, y: null };
+  const stageLim = { x: 300, y: null, zlo: -4, zhi: 4 };   // Z: the band the pods' surface sits in (they all lie at one height), with room for focus stacks
   try { Object.assign(stageLim, JSON.parse(localStorage.getItem('eggStageLim') || '{}')); } catch {}
-  const limSave = () => { try { localStorage.setItem('eggStageLim', JSON.stringify(stageLim)); } catch {} $('stageMaxX').value = stageLim.x; $('stageMaxY').value = stageLim.y ?? ''; };
-  const limitOf = i => !rig.homed ? null : i === 0 ? [0, stageLim.x] : i === 1 ? [0, stageLim.y ?? 95] : null;
+  const limSave = () => { try { localStorage.setItem('eggStageLim', JSON.stringify(stageLim)); } catch {} $('stageMaxX').value = stageLim.x; $('stageMaxY').value = stageLim.y ?? ''; $('stageZLo').value = stageLim.zlo; $('stageZHi').value = stageLim.zhi; };
+  // Z has no switch: its position is remembered in the browser between sessions (the motors hold while powered and the
+  // lead screw does not slip), so the Z band applies whether or not X and Y are homed.
+  const limitOf = i => i === 2 ? [stageLim.zlo, stageLim.zhi] : !rig.homed ? null : i === 0 ? [0, stageLim.x] : [0, stageLim.y ?? 95];
   const clampAx = (i, v) => { const L = limitOf(i); return L ? Math.max(L[0], Math.min(L[1], v)) : v; };
   const FEED = { X: 600, Y: 200, Z: 100 };   // real mm/min (drivers in full steps: $100=50, $101=$102=200). Z lifts the microscope: it stalls above ~120
   if (!('serial' in navigator)) { $('stageNoSerial').hidden = false; $('stageBody').hidden = true; }
@@ -1588,7 +1592,12 @@ document.documentElement.lang = 'en';
     line = line.trim(); if (!line) return;
     if (line[0] === '<') {
       const m = line.slice(1, -1).split('|'); rig.state = m[0];
-      const mp = m.find(f => f.startsWith('MPos:')); if (mp) { rig.mpos = mp.slice(5).split(',').map(Number); rig.pos = rig.mpos.map((v, i) => v - rig.zero[i]); }
+      const mp = m.find(f => f.startsWith('MPos:')); if (mp) {
+        rig.mpos = mp.slice(5).split(',').map(Number);
+        if (!rig.zSet) { rig.zSet = true; let z = 0; try { z = parseFloat(localStorage.getItem('eggStageZ')) || 0; } catch {} rig.zero[2] = rig.mpos[2] - z; }   // carry Z on from the last session
+        rig.pos = rig.mpos.map((v, i) => v - rig.zero[i]);
+        if (rig.state === 'Idle' && rig.pos[2] !== rig.zSaved) { rig.zSaved = rig.pos[2]; try { localStorage.setItem('eggStageZ', rig.pos[2].toFixed(3)); } catch {} }
+      }
       const pn = m.find(f => f.startsWith('Pn:')); rig.pins = pn ? pn.slice(3) : '';
       if (rig.state === 'Idle') rig.goal = rig.pos.slice();
       $('stageStatus').textContent = `${rig.state} · X ${rig.pos[0].toFixed(2)} Y ${rig.pos[1].toFixed(2)} Z ${rig.pos[2].toFixed(3)} · ${rig.homed ? 'homed' : 'not homed'}${rig.pins ? ' · switch ' + rig.pins : ''}`;
@@ -1625,7 +1634,7 @@ document.documentElement.lang = 'en';
     await stageSend('G90 G0 ' + parts.join(' ')); await stageIdle();
   }
   function stageClosed() {
-    clearInterval(rig.poll); rig.poll = null; rig.reader = rig.writer = null; rig.port = null; rig.homed = false; rig.zero = [0, 0, 0];
+    clearInterval(rig.poll); rig.poll = null; rig.reader = rig.writer = null; rig.port = null; rig.homed = false; rig.zero = [0, 0, 0]; rig.zSet = false;
     $('stageCtl').hidden = true; $('stageConnectBtn').textContent = 'Connect stage'; $('stageStatus').textContent = 'Not connected';
   }
   $('stageConnectBtn').onclick = async () => {
@@ -1671,16 +1680,17 @@ document.documentElement.lang = 'en';
     stageMsg('Homing Y: forwards to its switch…'); await seekSwitch('Y', 100);
     stageMsg('Homing X: left to its switch…'); await seekSwitch('X', 420);
     await stageRaw('?'); await sleepMs(250);
-    rig.zero = [rig.mpos[0], rig.mpos[1], 0]; rig.pos = [0, 0, rig.mpos[2]]; rig.homed = true;
+    rig.zero = [rig.mpos[0], rig.mpos[1], rig.zero[2]]; rig.pos = [0, 0, rig.mpos[2] - rig.zero[2]]; rig.homed = true;
     await stageSend('$21=1');
     const rx = back[0] - rig.zero[0], ry = back[1] - rig.zero[1];
     if (stageLim.y == null) { stageLim.y = +(Math.max(0, ry) + 1).toFixed(1); limSave(); }   // first time: it was safe where it stood
     stageMsg('Homed. Going back to where it was…'); await stageMoveTo({ x: rx, y: ry });
-    stageMsg(`Homed. Limits: X 0–${stageLim.x} mm, Y 0–${stageLim.y} mm from the switches (Z has no switch yet).`);
+    stageMsg(`Homed. Limits: X 0–${stageLim.x} mm, Y 0–${stageLim.y} mm from the switches Z ${stageLim.zlo} to ${stageLim.zhi} mm (kept from the last session).`);
   });
   limSave();
   $('stageMaxX').onchange = () => { const v = parseFloat($('stageMaxX').value); if (v > 0) stageLim.x = v; limSave(); };
   $('stageMaxY').onchange = () => { const v = parseFloat($('stageMaxY').value); stageLim.y = Number.isFinite(v) && v >= 0 ? v : null; limSave(); };
+  $('stageZLo').onchange = $('stageZHi').onchange = () => { const a = parseFloat($('stageZLo').value), b = parseFloat($('stageZHi').value); if (a < b) { stageLim.zlo = a; stageLim.zhi = b; } limSave(); };
   $('stageMaxYBtn').onclick = () => { if (!rig.homed) { stageMsg('Press Home first.'); return; } stageLim.y = +rig.pos[1].toFixed(1); limSave(); stageMsg(`Y limit set to ${stageLim.y} mm.`); };
   $('stageUnlockBtn').onclick = () => stageSend('$X').then(() => stageMsg('Unlocked (not homed: positions start from here).')).catch(e => stageMsg(e.message));
   $('stageStopBtn').onclick = async () => { rig.scanStop = true; await stageRaw('\x85'); await stageRaw('!'); await sleepMs(200); await stageRaw('\x18'); stageMsg('Stopped. Press Home or Unlock.'); rig.busy = false; };
