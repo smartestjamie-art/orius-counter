@@ -401,7 +401,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-20d'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-21a'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -1735,10 +1735,14 @@ document.documentElement.lang = 'en';
     const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(v, 0, 0, w, h);
     const d = ctx.getImageData(0, 0, w, h).data, g = new Float32Array(w * h);
     for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2];
-    // the board's brightness: measured at calibration (when the board shows); at high zoom the pod can fill the picture
-    const p90 = Float32Array.from(g).sort()[Math.floor(g.length * 0.9)], bright = stageCal && stageCal.bright ? stageCal.bright : p90, thr = 0.72 * bright;
+    const p90 = Float32Array.from(g).sort()[Math.floor(g.length * 0.9)];
+    // The pod is GREEN; the board is white/grey and a printed ruler or dot strip is black. Counting dark pixels made
+    // the scan follow the ruler (21 Nov test), so only clearly green pixels count as pod.
     let n = 0, sx = 0, sy = 0;
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (g[y * w + x] < thr) { n++; sx += x; sy += y; }
+    for (let y = 0, i = 0, j = 0; y < h; y++) for (let x = 0; x < w; x++, i++, j += 4) {
+      const r = d[j], gr = d[j + 1], b = d[j + 2];
+      if (gr > r + 10 && gr > b + 10) { n++; sx += x; sy += y; }
+    }
     return n ? { frac: n / g.length, cx: sx / n / w, cy: sy / n / h, p90 } : { frac: 0, cx: 0.5, cy: 0.5, p90 };
   }
   // Calibration: how the pod moves in the picture for +1 mm of Y (fractions per mm), so Y can re-centre it, and the
