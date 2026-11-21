@@ -404,7 +404,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-21g'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-21h'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -548,6 +548,7 @@ document.documentElement.lang = 'en';
     if (!settings.autoOverlap) return;
     for (const a of photos) {
       const b = neighbour(a, 1); if (!b || !a.thumb || !b.thumb) continue;
+      if (stageShift(a, b)) continue;   // placed by the stage's positions
       const key = a.key + '|' + b.key, known = knownShift(a), near = known ? +known.frac.toFixed(4) : null;
       const had = matches.get(key); if (had && (had === 'pending' || had.ok || had.near === near)) continue;
       if (a.thumb.w !== b.thumb.w || a.thumb.h !== b.thumb.h) { matches.set(key, { ok: false, why: 'different photo sizes', near }); continue; }
@@ -595,9 +596,23 @@ document.documentElement.lang = 'en';
     const med = xs => { const t = [...xs].sort((x, y) => x - y); return t[t.length >> 1]; };
     return { frac: med(v.map(x => Array.isArray(x) ? x[0] : x)), dy: med(v.map(x => Array.isArray(x) ? x[1] : 0)), n: v.length };
   }
-  // shift used for the a-b overlap: the match when clear, else the remembered shift for that mark pair
+  // Stage calibration (set by Calibrate in the Stage panel): how the picture moves for 1 mm of Y (du, dv) and of X
+  // (xu, xv), as fractions of the width and height.
+  let stageCal = null;
+  try { stageCal = JSON.parse(localStorage.getItem('eggStageCal') || 'null'); } catch {}
+  // Shots taken with the stage carry their position in the file name (_X.._Y.._Z.._S<px per mm>). For two such shots
+  // the overlap follows from how far the stage moved between them: no picture matching, no remembered guesses.
+  const stagePos = ph => { const m = /_X(-?[\d.]+)_Y(-?[\d.]+)_Z(-?[\d.]+)_S(\d+)(?=[_.])/.exec(ph.name || ''); return m ? { x: +m[1], y: +m[2], s: +m[4] } : null; };
+  function stageShift(a, b) {
+    const pa = stagePos(a), pb = stagePos(b);
+    if (!pa || !pb || !stageCal || stageCal.xu == null || pa.s !== pb.s || Math.abs(pa.s - stageCal.pxPerMm) > 1.5) return null;
+    const dX = pb.x - pa.x, dY = pb.y - pa.y;   // the picture's content moved by (dX*xu + dY*du, dX*xv + dY*dv); b(x) = a(x + s)
+    return { s: -(dX * stageCal.xu + dY * stageCal.du) * a.origW, dy: -(dX * stageCal.xv + dY * stageCal.dv) * a.origH, src: 'stage' };
+  }
+  // shift used for the a-b overlap: the stage's own positions; else the match when clear, else the remembered shift
   function shiftFor(a, b) {
     if (!a || !b) return null;
+    const st = stageShift(a, b); if (st) return st;
     const m = matchOf(a, b);
     if (m && m.ok) return { s: m.s, dy: m.dy, src: m.strip ? 'strip' : 'match' };
     const c = calibOf(a);
@@ -873,12 +888,18 @@ document.documentElement.lang = 'en';
     return Array.from({ length: MARKS }, (_, i) => i + 1).map(n => photos.find(p => p.pod === pod && p.shot === side + n && p.bmp && p.status === 'done')).filter(Boolean);
   }
   function stitchLayout(shots) {
+    // Laid out left to right as the pod lies in the pictures. A stage scan that steps the other way (each shot shows
+    // the part to the LEFT of the one before: negative shifts) is laid out in reverse order.
+    const sh0 = shots.slice(1).map((b, i) => shiftFor(shots[i], b)).filter(Boolean);
+    const rev = sh0.length > 0 && sh0.filter(x => x.s < 0).length > sh0.length / 2;
+    const list = rev ? shots.slice().reverse() : shots;
     let ox = 0, oy = 0;
-    return shots.map((ph, i) => {
+    return list.map((ph, i) => {
       const [x0, x1] = areaOf(ph);
       if (i) {
-        const a = shots[i - 1], [, ax1] = areaOf(a), sh = +posOf(ph) === +posOf(a) + 1 ? shiftFor(a, ph) : null;
-        ox += ax1 - x0; if (sh) oy += sh.dy || 0;
+        const a = list[i - 1], [, ax1] = areaOf(a);
+        const sh = Math.abs(+posOf(ph) - +posOf(a)) === 1 ? (rev ? shiftFor(ph, a) : shiftFor(a, ph)) : null;
+        ox += ax1 - x0; if (sh) oy += (rev ? -1 : 1) * (sh.dy || 0);
       }
       return { ph, x0, x1, ox, oy };
     });
@@ -918,7 +939,7 @@ document.documentElement.lang = 'en';
     $('stitchTitle').textContent = `Stitched pod · ${pod}`;
     for (const { side, shots } of sides) {
       const parts = stitchLayout(shots), total = shots.reduce((t, p) => t + (countOf(p) || 0), 0);
-      const joins = shots.slice(1).map((b, i) => { const sh = shiftFor(shots[i], b); return sh ? { match: 'matched', strip: 'matched on strip', set: 'set by hand', learned: 'remembered' }[sh.src] : 'mark edges'; });
+      const joins = shots.slice(1).map((b, i) => { const sh = shiftFor(shots[i], b); return sh ? { stage: 'stage position', match: 'matched', strip: 'matched on strip', set: 'set by hand', learned: 'remembered' }[sh.src] : 'mark edges'; });
       const wrap = document.createElement('div'); wrap.className = 'stitch';
       const head = document.createElement('div'); head.className = 'head';
       head.innerHTML = `<span>Side ${side}</span><b>${total} eggs</b><span class="meta"></span>`;
@@ -946,6 +967,7 @@ document.documentElement.lang = 'en';
       shots.slice(1).forEach((b, i) => {
         const a = shots[i]; if (+posOf(b) !== +posOf(a) + 1) return;
         const sh = shiftFor(a, b) || { s: a.origW * (1 - 0.3), dy: 0 };
+        if (sh.src === 'stage') return;   // set by the stage: nothing to adjust by hand
         const row = document.createElement('div'); row.className = 'joinAdj';
         row.innerHTML = `<b>${a.shot} | ${b.shot}</b><label>Overlap <output></output><input type="range" min="2" max="95" step="0.2"></label>` +
           `<label>Up / down <output></output><input type="range" min="-25" max="25" step="0.1"></label>`;
@@ -1812,19 +1834,19 @@ document.documentElement.lang = 'en';
   }
   // Calibration: how the pod moves in the picture for +1 mm of Y (fractions per mm), so Y can re-centre it, and the
   // picture's size in mm along X (same lens, square pixels), so the X step can give 30 % overlap.
-  let stageCal = null;
-  try { stageCal = JSON.parse(localStorage.getItem('eggStageCal') || 'null'); } catch {}
   const calNote = () => { $('stageCalNote').textContent = stageCal ? `${stageCal.pxPerMm.toFixed(0)} px/mm · X step ${autoStepX().toFixed(1)} mm` : 'not calibrated'; };
   function autoStepX() {
-    const v = $('video'), W = v.videoWidth || stageCal.W, H = v.videoHeight || stageCal.H;
-    const vx = stageCal.du * W, vy = stageCal.dv * H, L = Math.hypot(vx, vy);
-    const extent = Math.abs(W * vy / L) + Math.abs(H * vx / L);      // picture size along X (perpendicular to Y's motion)
+    const v = $('video'), W = v.videoWidth || stageCal.W;
+    // The step that moves the picture sideways by 70 % of its width (30 % overlap), from how X moves the picture.
+    if (stageCal.xu != null) return 0.7 / Math.abs(stageCal.xu);
+    const H = v.videoHeight || stageCal.H, vx = stageCal.du * W, vy = stageCal.dv * H, L = Math.hypot(vx, vy);
+    const extent = Math.abs(W * vy / L) + Math.abs(H * vx / L);
     return 0.7 * extent / stageCal.pxPerMm;
   }
   calNote();
   // Grey copy of the live picture, 160 px wide (small enough to compare quickly).
-  function grabGray() {
-    const v = $('video'), w = 160, h = Math.round(160 * v.videoHeight / v.videoWidth);
+  function grabGray(w = 320) {
+    const v = $('video'), h = Math.round(w * v.videoHeight / v.videoWidth);
     const c = grabGray.c || (grabGray.c = document.createElement('canvas')); c.width = w; c.height = h;
     const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(v, 0, 0, w, h);
     const d = ctx.getImageData(0, 0, w, h).data, g = new Float32Array(w * h);
@@ -1848,18 +1870,27 @@ document.documentElement.lang = 'en';
   // however much of the pod is in view. Gives the picture's direction and scale for 1 mm of Y.
   async function stageCalibrate() {
     if (!stream || !$('video').videoWidth) throw new Error('Start the camera first.');
-    const y0 = rig.pos[1], step = rig.homed && y0 < 2.2 ? 2 : -2;   // forwards (backwards the column is near), unless it sits at the front limit
-    await nextFrame(); await sleepMs(200); const a = grabGray();
-    await stageMoveTo({ y: y0 + step }); await sleepMs(500); await nextFrame(); const b = grabGray();
-    await stageMoveTo({ y: y0 }); await sleepMs(300);
-    const s = pictureShift(a, b, 40), v = $('video');
-    const du = s.sx / a.w / step, dv = s.sy / a.h / step, pxPerMm = Math.hypot(du * v.videoWidth, dv * v.videoHeight);
-    if (Math.hypot(s.sx, s.sy) < 2) throw new Error('The picture did not move: check the Y motor (12 V, cable).');
-    stageCal = { du, dv, pxPerMm, W: v.videoWidth, H: v.videoHeight };
-    rig.yBackMax = y0 + 1;   // Y never goes more than 1 mm further back than where it was calibrated (the column is behind)
+    const v = $('video'), mm = 3;
+    // one axis: move it by mm (towards the side with room), compare the picture before and after, come back
+    const axis = async (k, i) => {
+      const p0 = rig.pos[i], L = limitOf(i), step = L && p0 + mm > L[1] ? -mm : (i === 1 && !(L && p0 - mm < L[0]) ? -mm : mm);   // Y goes forwards when it can
+      await nextFrame(); await sleepMs(250); const a = grabGray();
+      await stageMoveTo({ [k]: p0 + step }); await sleepMs(500); await nextFrame(); const b = grabGray();
+      await stageMoveTo({ [k]: p0 }); await sleepMs(300);
+      const sh = pictureShift(a, b, 60);
+      if (Math.hypot(sh.sx, sh.sy) < 3) throw new Error(`The picture did not move with ${k.toUpperCase()}: check that motor (12 V, cable), and that something with texture is in view.`);
+      return [sh.sx / a.w / step, sh.sy / a.h / step];
+    };
+    stageMsg('Calibrating: moving Y 3 mm and back…'); const [du, dv] = await axis('y', 1);
+    stageMsg('Calibrating: moving X 3 mm and back…'); const [xu, xv] = await axis('x', 0);
+    const py = Math.hypot(du * v.videoWidth, dv * v.videoHeight), px = Math.hypot(xu * v.videoWidth, xv * v.videoHeight), pxPerMm = (px + py) / 2;
+    if (Math.abs(px - py) > 0.15 * pxPerMm) throw new Error(`X and Y give different scales (${px.toFixed(0)} and ${py.toFixed(0)} px/mm): one of them is not moving freely. Check and calibrate again.`);
+    stageCal = { du, dv, xu, xv, pxPerMm, W: v.videoWidth, H: v.videoHeight };
+    rig.yBackMax = rig.pos[1] + 1;
     try { localStorage.setItem('eggStageCal', JSON.stringify(stageCal)); } catch {}
     calNote(); if ($('stageAutoStep').checked) $('stageStepX').value = autoStepX().toFixed(1);
-    stageMsg(`Calibrated: ${pxPerMm.toFixed(0)} px per mm (picture moved ${s.sx}, ${s.sy} px for ${step} mm of Y).`);
+    const view = xu > 0 ? 'left' : 'right';
+    stageMsg(`Calibrated: ${pxPerMm.toFixed(0)} px per mm, picture ${(v.videoWidth / pxPerMm).toFixed(0)} × ${(v.videoHeight / pxPerMm).toFixed(0)} mm. Scanning steps X+, so the view travels to the ${view} along the pod: start at the pod's ${view === 'left' ? 'right' : 'left'} end.`);
   }
   $('stageCalBtn').onclick = e => stageRun(e.target, stageCalibrate);
   // Centre the pod across its width: along Y's direction in the picture, find the pod's two edges (green pixels) in a
@@ -1909,7 +1940,7 @@ document.documentElement.lang = 'en';
     if (!stream || !$('video').videoWidth) throw new Error('Start the camera first.');
     if (!rig.homed) throw new Error('Press Home first: it finds the X and Y switches, so the scan stays inside the limits.');
     const centre = $('stageCentre').checked;
-    if (centre && !stageCal) await stageCalibrate();
+    if (!stageCal || stageCal.xu == null || stageCal.W !== $('video').videoWidth) await stageCalibrate();   // the scale places the shots: always needed
     if (stageCal && $('stageAutoStep').checked) $('stageStepX').value = autoStepX().toFixed(1);
     const x0 = parseFloat($('stageStartX').value), dx = parseFloat($('stageStepX').value);
     if (!Number.isFinite(x0) || !(dx > 0)) throw new Error('Set the scan start and the X step.');
