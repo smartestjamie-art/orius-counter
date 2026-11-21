@@ -401,7 +401,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-21c'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-21d'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -1783,7 +1783,7 @@ document.documentElement.lang = 'en';
   // however much of the pod is in view. Gives the picture's direction and scale for 1 mm of Y.
   async function stageCalibrate() {
     if (!stream || !$('video').videoWidth) throw new Error('Start the camera first.');
-    const y0 = rig.pos[1], step = 2;
+    const y0 = rig.pos[1], step = -2;   // forwards only: backwards (+Y) the tray can hit the column
     await nextFrame(); await sleepMs(200); const a = grabGray();
     await stageMoveTo({ y: y0 + step }); await sleepMs(500); await nextFrame(); const b = grabGray();
     await stageMoveTo({ y: y0 }); await sleepMs(300);
@@ -1791,6 +1791,7 @@ document.documentElement.lang = 'en';
     const du = s.sx / a.w / step, dv = s.sy / a.h / step, pxPerMm = Math.hypot(du * v.videoWidth, dv * v.videoHeight);
     if (Math.hypot(s.sx, s.sy) < 2) throw new Error('The picture did not move: check the Y motor (12 V, cable).');
     stageCal = { du, dv, pxPerMm, W: v.videoWidth, H: v.videoHeight };
+    rig.yBackMax = y0 + 1;   // Y never goes more than 1 mm further back than where it was calibrated (the column is behind)
     try { localStorage.setItem('eggStageCal', JSON.stringify(stageCal)); } catch {}
     calNote(); if ($('stageAutoStep').checked) $('stageStepX').value = autoStepX().toFixed(1);
     stageMsg(`Calibrated: ${pxPerMm.toFixed(0)} px per mm (picture moved ${s.sx}, ${s.sy} px for ${step} mm of Y).`);
@@ -1823,7 +1824,9 @@ document.documentElement.lang = 'en';
       else move = -(tmin + tmax) / 2;
       const dyMm = Math.max(-10, Math.min(10, move / ppm));
       if (Math.abs(dyMm) < 0.1) return true;
-      await stageMoveTo({ y: rig.pos[1] + dyMm }); await sleepMs(300); await nextFrame();
+      const yT = Math.min(rig.pos[1] + dyMm, rig.yBackMax ?? Infinity);
+      if (Math.abs(yT - rig.pos[1]) < 0.1) return true;                  // already at the back limit
+      await stageMoveTo({ y: yT }); await sleepMs(300); await nextFrame();
     }
     return true;
   }
