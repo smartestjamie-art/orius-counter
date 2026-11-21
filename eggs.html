@@ -404,7 +404,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-21i'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-21j'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -602,6 +602,10 @@ document.documentElement.lang = 'en';
   try { stageCal = JSON.parse(localStorage.getItem('eggStageCal') || 'null'); } catch {}
   // Shots taken with the stage carry their position in the file name (_X.._Y.._Z.._S<px per mm>). For two such shots
   // the overlap follows from how far the stage moved between them: no picture matching, no remembered guesses.
+  // Pod pixel: yellow-green to brown, i.e. red and green both well above blue. (The pod under this microscope is
+  // yellowish: green is only a few counts above red, so "green above red" missed most of it. The board and the printed
+  // ruler are grey or black: their blue is as high as the rest.)
+  const isPod = (r, g, b) => Math.min(r, g) > 1.25 * b + 10;
   const stagePos = ph => { const m = /_X(-?[\d.]+)_Y(-?[\d.]+)_Z(-?[\d.]+)_S(\d+)(?=[_.])/.exec(ph.name || ''); return m ? { x: +m[1], y: +m[2], s: +m[4] } : null; };
   function stageShift(a, b) {
     const pa = stagePos(a), pb = stagePos(b);
@@ -1723,7 +1727,7 @@ document.documentElement.lang = 'en';
     const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(v, 0, 0, w, h);
     const d = ctx.getImageData(0, 0, w, h).data, g = new Float32Array(w * h), b = new Float32Array(w * h), pod = new Uint8Array(w * h);
     let np = 0;
-    for (let i = 0, j = 0; i < g.length; i++, j += 4) { g[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2]; if (d[j + 1] > d[j] + 10 && d[j + 1] > d[j + 2] + 10) { pod[i] = 1; np++; } }
+    for (let i = 0, j = 0; i < g.length; i++, j += 4) { g[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2]; if (isPod(d[j], d[j + 1], d[j + 2])) { pod[i] = 1; np++; } }
     const all = np < 0.05 * g.length;
     for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) { const i = y * w + x; b[i] = (4 * g[i] + g[i - 1] + g[i + 1] + g[i - w] + g[i + w]) / 8; }
     let s = 0, s2 = 0, n = 0;
@@ -1833,8 +1837,7 @@ document.documentElement.lang = 'en';
     // the scan follow the ruler (21 Nov test), so only clearly green pixels count as pod.
     let n = 0, sx = 0, sy = 0;
     for (let y = 0, i = 0, j = 0; y < h; y++) for (let x = 0; x < w; x++, i++, j += 4) {
-      const r = d[j], gr = d[j + 1], b = d[j + 2];
-      if (gr > r + 10 && gr > b + 10) { n++; sx += x; sy += y; }
+      if (isPod(d[j], d[j + 1], d[j + 2])) { n++; sx += x; sy += y; }
     }
     return n ? { frac: n / g.length, cx: sx / n / w, cy: sy / n / h, p90 } : { frac: 0, cx: 0.5, cy: 0.5, p90 };
   }
@@ -1917,10 +1920,10 @@ document.documentElement.lang = 'en';
         const px = x - w / 2, py = y - h / 2;
         if (Math.abs(-dy * px + dx * py) > band) continue;            // outside the band through the middle
         const t = dx * px + dy * py; if (t < fmin) fmin = t; if (t > fmax) fmax = t;
-        if (d[j + 1] > d[j] + 10 && d[j + 1] > d[j + 2] + 10) { n++; if (t < tmin) tmin = t; if (t > tmax) tmax = t; }
+        if (isPod(d[j], d[j + 1], d[j + 2])) { n++; if (t < tmin) tmin = t; if (t > tmax) tmax = t; }
       }
       if (n < 20) {                                                       // no pod across the middle of the picture
-        let gAll = 0; for (let j = 0; j < d.length; j += 4) if (d[j + 1] > d[j] + 10 && d[j + 1] > d[j + 2] + 10) gAll++;
+        let gAll = 0; for (let j = 0; j < d.length; j += 4) if (isPod(d[j], d[j + 1], d[j + 2])) gAll++;
         return gAll > 0.01 * w * h ? 'tail' : false;                       // some pod at the side: its tail is in this picture
       }
       // An edge counts as seen when board shows beyond it (the green stops well inside the frame).
@@ -1950,7 +1953,7 @@ document.documentElement.lang = 'en';
     const c = podCentre.c3 || (podCentre.c3 = document.createElement('canvas')); c.width = w; c.height = h;
     const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(v, 0, 0, w, h);
     const d = ctx.getImageData(0, 0, w, h).data, left = stageCal.xu > 0, x0 = left ? 0 : w - 8;   // X+ moves the picture's content right: the view goes left
-    let n = 0; for (let y = 0; y < h; y++) for (let x = x0; x < x0 + 8; x++) { const j = (y * w + x) * 4; if (d[j + 1] > d[j] + 10 && d[j + 1] > d[j + 2] + 10) n++; }
+    let n = 0; for (let y = 0; y < h; y++) for (let x = x0; x < x0 + 8; x++) { const j = (y * w + x) * 4; if (isPod(d[j], d[j + 1], d[j + 2])) n++; }
     return n > 0.03 * 8 * h;
   }
   // Scan: the remaining shots of this side, X stepped from the start, autofocus, then the normal Capture.
