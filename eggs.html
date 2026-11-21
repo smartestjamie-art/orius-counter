@@ -1537,7 +1537,7 @@ document.documentElement.lang = 'en';
   // X moves the riser stack along the rails (the pod), Y moves the tray front-back, Z moves the microscope (focus).
   // Commands wait for GRBL's "ok"; '?' is polled for the state and machine position.
   const rig = { port: null, writer: null, reader: null, buf: '', waiters: [], state: '', pos: [0, 0, 0], poll: null, busy: false };
-  const FEED = { X: 1500, Y: 60, Z: 100 };    // the mini slides stall above ~120 mm/min (seller: 0-120)
+  const FEED = { X: 150, Y: 60, Z: 30 };     // the mini slides stall above ~120 mm/min (seller: 0-120)
   if (!('serial' in navigator)) { $('stageNoSerial').hidden = false; $('stageBody').hidden = true; }
   const enc = new TextEncoder(), dec = new TextDecoder();
   const stageMsg = t => { $('stageNote').textContent = t; };
