@@ -384,7 +384,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-22r'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-22s'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -463,7 +463,7 @@ document.documentElement.lang = 'en';
         if (stored && stored.version === EGG_COUNTER && stored.eggD === eggPxFor(ph) && stored.contrast === settings.contrast && stored.edge === settings.edge) ph.status = 'done';
         else await countPhoto(ph);
       } catch (err) { ph.status = 'error: ' + err.message; }
-      setBusy(''); render(); if (selected === ph) draw();
+      setBusy(''); trimBitmaps(); render(); if (selected === ph) draw();
     });
     return ph;
   }
@@ -498,6 +498,16 @@ document.documentElement.lang = 'en';
     }, 350);
   }
 
+  // Full-size pictures take ~20 MB each in memory: only the pod being shot and the pod being looked at keep them.
+  // The others keep their thumbnail and are decoded again from the stored file when needed.
+  function trimBitmaps() {
+    const keep = new Set([podId, selected && selected.pod]);
+    for (const ph of photos) if (ph.bmp && !ph.example && !keep.has(ph.pod) && ph.status === 'done') { ph.bmp.close(); ph.bmp = null; ph.evicted = true; }
+  }
+  async function ensureBmps(list) {
+    for (const ph of list) if (!ph.bmp && ph.evicted) { ph.bmp = await createImageBitmap(ph.blob); ph.evicted = false; }
+  }
+  const hasPic = p => p.bmp || p.evicted;
   function removePhoto(ph) {
     const i = photos.indexOf(ph); if (i < 0) return;
     photos.splice(i, 1);
@@ -505,7 +515,8 @@ document.documentElement.lang = 'en';
     if (selected === ph) { selected = null; zoom = null; if (photos.length) select(photos[Math.min(i, photos.length - 1)]); }
   }
 
-  function select(ph) { if (selected !== ph) zoom = null; selected = ph; if (ph && posOf(ph)) $('trimPos').value = posOf(ph); renderTrim(); render(); draw(); }
+  function select(ph) { if (ph && !ph.bmp && ph.evicted) { ensureBmps(photos.filter(p => p.pod === ph.pod)).then(() => { trimBitmaps(); select(ph); }); return; }
+    if (selected !== ph) zoom = null; selected = ph; if (ph && posOf(ph)) $('trimPos').value = posOf(ph); renderTrim(); render(); draw(); }
 
   // ---------- overlap between neighbouring shots of one side (A1-A2, A2-A3, A3-A4, and the same on B) ----------
   const THUMB_W = 640;
@@ -910,7 +921,7 @@ document.documentElement.lang = 'en';
   // Shot b's counted part starts where shot a's ends, so b sits at a's offset + a.x1 - b.x0 (with a matched overlap
   // that is exactly the shift s), and dy from the match lines them up vertically.
   function sideShots(pod, side) {
-    return Array.from({ length: MARKS }, (_, i) => i + 1).map(n => photos.find(p => p.pod === pod && p.shot === side + n && p.bmp && p.status === 'done')).filter(Boolean);
+    return Array.from({ length: MARKS }, (_, i) => i + 1).map(n => photos.find(p => p.pod === pod && p.shot === side + n && hasPic(p) && p.status === 'done')).filter(Boolean);
   }
   function stitchLayout(shots) {
     // Laid out left to right as the pod lies in the pictures. A stage scan that steps the other way (each shot shows
@@ -956,6 +967,8 @@ document.documentElement.lang = 'en';
     // while the camera is on, show the pod being shot (it grows shot by shot); otherwise the pod of the photo opened
     const pod = stream || !selected || selected.example ? podId : selected.pod;
     const sides = ['A', 'B'].map(side => ({ side, shots: sideShots(pod, side) })).filter(x => x.shots.length >= 1);
+    const gone = sides.flatMap(x => x.shots).filter(p => !p.bmp);
+    if (gone.length) { ensureBmps(gone).then(() => { stitchSig = ''; renderStitch(); }); return; }
     const sig = pod + '|' + JSON.stringify(settings.calib || {}) + '|' + $('showMarks').checked + '|' + sides.map(x => x.shots.map(p => [p.key, areaOf(p).map(Math.round), countOf(p)].join(':')).join(',')).join(';');
     if (sig === stitchSig) return;
     stitchSig = sig;
@@ -972,6 +985,7 @@ document.documentElement.lang = 'en';
       head.querySelector('.meta').textContent = `${shots.map(p => p.shot).join(' + ')} · joins: ${joins.join(', ')}`;
       const save = document.createElement('button'); save.className = 'small'; save.textContent = 'Save stitched JPG';
       save.onclick = async () => {
+        await ensureBmps(sideShots(pod, side));
         const full = stitchCanvas(stitchLayout(sideShots(pod, side)), 1);
         const blob = await new Promise(r => full.toBlob(r, 'image/jpeg', 0.92));
         download(blob, `${pod.replace(/[^\w-]+/g, '_')}_side${side}_stitched.jpg`);
@@ -983,6 +997,7 @@ document.documentElement.lang = 'en';
       view0.style.cursor = 'zoom-in'; view0.title = 'Open full size in a new tab';
       view0.onclick = async () => { // full resolution in a new tab, where it can be zoomed freely
         const tab = window.open('', '_blank');
+        await ensureBmps(sideShots(pod, side));
         const full = stitchCanvas(stitchLayout(sideShots(pod, side)), 1);
         const blob = await new Promise(r => full.toBlob(r, 'image/jpeg', 0.92));
         if (tab) tab.location.href = URL.createObjectURL(blob);
@@ -1136,11 +1151,12 @@ document.documentElement.lang = 'en';
   // ---------- pod ID ----------
   $('podId').value = podId;
   $('podId').oninput = () => { podId = $('podId').value.trim() || 'Pod'; saveSettings(); renderShots(); renderStitch(); };
-  $('newPodBtn').onclick = () => {
+  $('newPodBtn').onclick = async () => {
+    if (podPics(podId).length && !podSaved(podId)) { if (!(await savePod(podId))) return; }
     const m = podId.match(/^(.*?)(\d+)$/);
     let next = m ? m[1] + (+m[2] + 1) : podId + ' 2';
     while (photos.some(p => p.pod === next)) { const k = next.match(/^(.*?)(\d+)$/); next = k[1] + (+k[2] + 1); }
-    podId = next; $('podId').value = podId; saveSettings(); renderShots(); renderStitch();
+    podId = next; $('podId').value = podId; saveSettings(); trimBitmaps(); renderShots(); renderStitch(); renderSaved();
   };
 
   // ---------- overlap trim, per rail mark ----------
@@ -1687,7 +1703,8 @@ document.documentElement.lang = 'en';
   };
   async function stageRun(btn, fn) {
     if (rig.busy) return; rig.busy = true; rig.aborted = false; if (btn) btn.disabled = true;
-    try { await fn(); } catch (e) { stageMsg(e.message); } finally { rig.busy = false; if (btn) btn.disabled = false; }
+    try { await fn(); } catch (e) { if (rig.scanning && (rig.bouncing || /reset|Alarm/i.test(e.message))) rig.resume = true; stageMsg(e.message); }
+    finally { rig.busy = false; rig.scanning = false; if (btn) btn.disabled = false; }
   }
   // Home, done by the page (GRBL's own $H needs a switch on every axis; Z has none yet): each axis jogs slowly towards
   // its switch while the status is polled, stops the moment the switch reads pressed, and backs off until it is free
@@ -1718,7 +1735,8 @@ document.documentElement.lang = 'en';
         : `Backed off the ${p.replace(/[^XYZ]/g, '')} switch. Press Home before scanning again.`);
     } catch (e) { stageMsg('Backing off failed: ' + e.message + ' Press Stop, then Unlock and jog away by hand.'); }
     finally { rig.bouncing = false; rig.homed = false; }
-    if (glitch) setTimeout(() => { if (!rig.busy && !rig.aborted) $('stageHomeBtn').click(); }, 500);
+    if (glitch) (async () => { for (let i = 0; i < 100 && rig.busy; i++) await sleepMs(200); if (!rig.aborted) $('stageHomeBtn').click(); })();
+    else rig.resume = false;   // a real hit: a person should look
   }
   async function seekSwitch(ax, dist, dir = -1) {   // dir: the side the switch is on (-1: minus, +1: plus)
     const pressed = async () => { await stageRaw('?'); await sleepMs(120); return rig.pins.includes(ax); };
@@ -1737,7 +1755,11 @@ document.documentElement.lang = 'en';
     if (await pressed()) throw new Error(`The ${ax} switch did not release.`);
     await off(2);
   }
-  $('stageHomeBtn').onclick = e => stageRun(e.target, async () => { try { await homeAll(); } finally { rig.homing = false; } });
+  $('stageHomeBtn').onclick = e => stageRun(e.target, async () => {
+    try { await homeAll(); } finally { rig.homing = false; }
+    // a scan cut short by a flicker on a switch wire carries on by itself (its missing shots), at most 3 times a scan
+    if (rig.resume) { rig.resume = false; if ((rig.resumes = (rig.resumes || 0) + 1) <= 3) { stageMsg('Carrying on with the scan where it stopped…'); setTimeout(() => $('stageScanBtn').click(), 800); } }
+  });
   async function homeAll() {
     try { await stageSend('$X'); } catch {}
     await stageRaw('?'); await sleepMs(250);
@@ -1956,8 +1978,7 @@ document.documentElement.lang = 'en';
     const stamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '_');
     const name = `${podId.replace(/[^\w-]+/g, '_')}_${shot || 'extra'}_${stamp}${stacked ? '_stack' : ''}${tag}.jpg`;
     addPhoto(blob, name, { select: false, shot });   // the shot reserved when it was swept, not the next free one
-    $('saveNote').textContent = `Captured ${name}.`;
-    renderCaptureBtn(); renderShots();
+    renderCaptureBtn(); renderShots(); renderSaved();
   }
   // Focus stack with a check. Each height's frame is scored per part of the pod (grid cells, pod pixels only). A part
   // whose sharpest frame is the lowest (or highest) height taken was not caught in focus: its sharp height lies beyond
@@ -2164,7 +2185,7 @@ document.documentElement.lang = 'en';
     if (stageCal && $('stageAutoStep').checked) $('stageStepX').value = autoStepX().toFixed(1);
     const x0 = parseFloat($('stageStartX').value), dx = parseFloat($('stageStepX').value);
     if (!Number.isFinite(x0) || !(dx > 0)) throw new Error('Set the scan start and the X step.');
-    rig.scanStop = false; let n = 0, side = null, up = true, view = null, merging = Promise.resolve(), t0 = performance.now();
+    rig.scanning = true; rig.scanStop = false; let n = 0, side = null, up = true, view = null, merging = Promise.resolve(), t0 = performance.now();
     const sweeping = $('stageStack').checked;
     while (!rig.scanStop) {
       const shot = nextShot(podId); if (!shot) break;
@@ -2194,7 +2215,7 @@ document.documentElement.lang = 'en';
     const end = $('stageNote').textContent;
     if (n && !rig.scanStop) await stageMoveTo(sweeping ? { x: x0, z: RIG.park.z } : { x: x0 });   // back to the start, ready for the other side
     if (sweeping) { stageMsg('Merging the last shots…'); await merging; }
-    const mins = ((performance.now() - t0) / 60000).toFixed(1);
+    const mins = ((performance.now() - t0) / 60000).toFixed(1); rig.resumes = 0;
     stageMsg(n ? `Scanned ${n} shot${n > 1 ? 's' : ''} in ${mins} min${/ends here|outside the limit/.test(end) ? ' (' + end + ')' : ''}. Flip the pod and press Side B next, then Scan again.` : 'Nothing to scan: this side is complete.');
   });
 
@@ -2206,12 +2227,55 @@ document.documentElement.lang = 'en';
   const csv = rows => new Blob([rows.map(r => r.map(csvCell).join(',')).join('\n') + '\n'], { type: 'text/csv' });
   const real = () => photos.filter(p => !p.example);
   // the pod's shots as they were taken (no dots), one file each
-  $('savePodPhotos').onclick = async () => {
-    const pod = selected && !selected.example ? selected.pod : podId, list = photos.filter(p => p.pod === pod && !p.example);
-    if (!list.length) { $('saveNote').textContent = `No photos of ${pod} to save.`; return; }
-    for (const p of list) { download(p.blob, p.name); await new Promise(r => setTimeout(r, 400)); }
-    $('saveNote').textContent = `Saved ${list.length} original photo${list.length > 1 ? 's' : ''} of ${pod}. If Chrome asks to download several files, choose Allow.`;
-  };
+  // One file per pod: a .zip (stored, not compressed: JPEGs do not shrink) with the shots as taken and each side's
+  // stitched picture. A pod counts as saved once its zip was made with all its shots; Next pod saves it first if not.
+  const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+  const crc32 = b => { let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+  async function makeZip(files) {   // files: [{ name, blob }]
+    const parts = [], central = []; let off = 0;
+    const d = new Date(), dt = ((d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1)), dd = (((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate());
+    for (const f of files) {
+      const data = new Uint8Array(await f.blob.arrayBuffer()), name = new TextEncoder().encode(f.name), crc = crc32(data);
+      const h = new DataView(new ArrayBuffer(30));
+      [[0, 0x04034b50, 4], [4, 20, 2], [6, 0x0800, 2], [8, 0, 2], [10, dt, 2], [12, dd, 2], [14, crc, 4], [18, data.length, 4], [22, data.length, 4], [26, name.length, 2], [28, 0, 2]]
+        .forEach(([o, v, n]) => n === 4 ? h.setUint32(o, v, true) : h.setUint16(o, v, true));
+      const c = new DataView(new ArrayBuffer(46));
+      [[0, 0x02014b50, 4], [4, 20, 2], [6, 20, 2], [8, 0x0800, 2], [10, 0, 2], [12, dt, 2], [14, dd, 2], [16, crc, 4], [20, data.length, 4], [24, data.length, 4], [28, name.length, 2], [30, 0, 2], [32, 0, 2], [34, 0, 2], [36, 0, 2], [38, 0, 4], [42, off, 4]]
+        .forEach(([o, v, n]) => n === 4 ? c.setUint32(o, v, true) : c.setUint16(o, v, true));
+      parts.push(h, name, data); central.push(c, name); off += 30 + name.length + data.length;
+    }
+    const size = central.reduce((t, x) => t + x.byteLength, 0), e = new DataView(new ArrayBuffer(22));
+    [[0, 0x06054b50, 4], [4, 0, 2], [6, 0, 2], [8, files.length, 2], [10, files.length, 2], [12, size, 4], [16, off, 4], [20, 0, 2]]
+      .forEach(([o, v, n]) => n === 4 ? e.setUint32(o, v, true) : e.setUint16(o, v, true));
+    return new Blob([...parts, ...central, e], { type: 'application/zip' });
+  }
+  let savedPods = {}; try { savedPods = JSON.parse(localStorage.getItem('eggSavedPods') || '{}'); } catch {}
+  const podPics = pod => photos.filter(p => p.pod === pod && !p.example);
+  const podSaved = pod => savedPods[pod] === podPics(pod).length;
+  function renderSaved() {
+    const n = podPics(podId).length;
+    $('saveNote').textContent = !n ? '' : podSaved(podId) ? `${podId} is saved (${n} shots).` : `${podId}: ${n} shot${n > 1 ? 's' : ''} not saved yet — Next pod saves it, or press Save this pod.`;
+  }
+  async function savePod(pod) {
+    const list = podPics(pod); if (!list.length) return false;
+    $('saveNote').textContent = `Saving ${pod}…`;
+    const files = list.map(p => ({ name: p.name, blob: p.blob }));
+    for (const side of ['A', 'B']) {
+      const shots = sideShots(pod, side); if (!shots.length) continue;
+      await ensureBmps(shots);
+      const full = stitchCanvas(stitchLayout(shots), 1);
+      files.push({ name: `${pod.replace(/[^\w-]+/g, '_')}_side${side}_stitched.jpg`, blob: await new Promise(r => full.toBlob(r, 'image/jpeg', 0.92)) });
+      full.width = full.height = 0;
+    }
+    const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    download(await makeZip(files), `${pod.replace(/[^\w-]+/g, '_')}_${day}.zip`);
+    savedPods[pod] = list.length; try { localStorage.setItem('eggSavedPods', JSON.stringify(savedPods)); } catch {}
+    trimBitmaps();
+    $('saveNote').textContent = `Saved ${pod}: ${list.length} shots and the stitched side${files.length - list.length > 1 ? 's' : ''} in one .zip (your Downloads folder).`;
+    return true;
+  }
+  setTimeout(renderSaved, 3000);
+  $('savePodPhotos').onclick = () => savePod(selected && !selected.example && !stream ? selected.pod : podId);
   $('saveImg').onclick = async () => {
     const ph = selected; if (!ph || !ph.bmp) return;
     const c = document.createElement('canvas'); c.width = ph.origW; c.height = ph.origH;
