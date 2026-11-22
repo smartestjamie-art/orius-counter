@@ -248,7 +248,7 @@
               <pre id="stageLog" style="margin:6px 0 0;max-height:180px;overflow:auto;font-size:12px;white-space:pre-wrap"></pre>
             </details>
           </div>
-          <p class="note" id="stageNote">Connect the Arduino by USB, press Connect stage and pick its port. After switching on, press Home: it finds the X and Y switches and sets the limits. Unlock moves without limits.</p>
+          <p class="note" id="stageNote">Connect the Arduino by USB and switch on the 12 V, then press Connect stage (the first time on a computer, pick the Arduino's port). The stage then finds its switches by itself (Home: Z up first, then Y and X), about 40 s, and is ready to scan.</p>
           <p class="note">Jog: click for one step, hold for continuous movement. Keys: ← → move X, ↑ ↓ move Y, Page Up/Down move Z. Captured photos carry the stage position in their file name.</p>
         </div>
       </div>
@@ -389,7 +389,7 @@ document.documentElement.lang = 'en';
 (() => {
   const $ = id => document.getElementById(id);
   // shots per side: 4 on the manual rail (its four marks); the motorised stage can take up to 9 (set in the Stage panel)
-  const MARKS = (() => { try { const n = +localStorage.getItem('eggShotsPerSide'); return n >= 1 && n <= 16 ? n : 4; } catch { return 4; } })();
+  const MARKS = (() => { try { const n = +localStorage.getItem('eggShotsPerSide'); return n >= 1 && n <= 16 ? n : 16; } catch { return 16; } })();   // the stage rig: up to 16 shots cover a whole pod
   $('trimPos').innerHTML = Array.from({ length: MARKS }, (_, i) => `<option value="${i + 1}">${i + 1}</option>`).join('');
   const SHOTS = ['A', 'B'].flatMap(side => Array.from({ length: MARKS }, (_, i) => side + (i + 1)));
   // contrast 20: on the closer rig (pod 'test', 16 Nov) 14 also marked plain fuzz; 20 marked 23 where 22 eggs are seen by eye
@@ -406,7 +406,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-22b'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-22c'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -600,8 +600,15 @@ document.documentElement.lang = 'en';
   }
   // Stage calibration (set by Calibrate in the Stage panel): how the picture moves for 1 mm of Y (du, dv) and of X
   // (xu, xv), as fractions of the width and height.
-  let stageCal = null;
-  try { stageCal = JSON.parse(localStorage.getItem('eggStageCal') || 'null'); } catch {}
+  // The rig's own settings, measured on it (22 Nov), so every computer starts from the same known-good values; a browser
+  // keeps its own copy only once it has calibrated or changed something itself.
+  const RIG = {
+    cal: { du: -0.00208, dv: -0.03889, xu: 0.02917, xv: -0.00278, pxPerMm: 75.8, W: 2592, H: 1944 },   // picture moves for 1 mm of Y and X
+    lim: { x: 300, y: 80, zlo: -19.4, zhi: -8.9, zRef: 'switch' },   // from the switches; Z below its top switch (pods in focus near -16.5)
+    zStack: { lo: -1.65, hi: 1.65 }, zStep: 0.3,
+  };
+  let stageCal = RIG.cal;
+  try { const c = JSON.parse(localStorage.getItem('eggStageCal') || 'null'); if (c && c.xu != null) stageCal = c; } catch {}
   // Shots taken with the stage carry their position in the file name (_X.._Y.._Z.._S<px per mm>). For two such shots
   // the overlap follows from how far the stage moved between them: no picture matching, no remembered guesses.
   // Pod pixel: yellow-green to brown, i.e. red and green both well above blue. (The pod under this microscope is
@@ -1607,8 +1614,8 @@ document.documentElement.lang = 'en';
   // switches and puts zero 2 mm off them; from then on X stays in 0..X limit and Y in 0..Y limit, whatever asks for
   // the move (jog, centring, scan). Z has no switch yet, so Z is not limited. Limits are kept in the browser.
   const AX = { X: 0, Y: 1, Z: 2 };
-  const stageLim = { x: 300, y: null, zlo: -4, zhi: 4 };   // Z: the band the pods' surface sits in (they all lie at one height), with room for focus stacks
-  try { Object.assign(stageLim, JSON.parse(localStorage.getItem('eggStageLim') || '{}')); } catch {}
+  const stageLim = { ...RIG.lim };   // Z: the band the pods' surface sits in (they all lie at one height), with room for focus stacks
+  try { const l = JSON.parse(localStorage.getItem('eggStageLim') || '{}'); if (l.zRef === 'switch') Object.assign(stageLim, l); } catch {}   // older copies (Z without its switch) are ignored
   const limSave = () => { try { localStorage.setItem('eggStageLim', JSON.stringify(stageLim)); } catch {} $('stageMaxX').value = stageLim.x; $('stageMaxY').value = stageLim.y ?? ''; $('stageZLo').value = stageLim.zlo; $('stageZHi').value = stageLim.zhi; };
   // Z has no switch: its position is remembered in the browser between sessions (the motors hold while powered and the
   // lead screw does not slip), so the Z band applies whether or not X and Y are homed.
@@ -1639,7 +1646,12 @@ document.documentElement.lang = 'en';
       rig.homed = false; stageMsg(`${line}: stopped.`);
       if (/ALARM:1\b/.test(line) && !rig.homing && !rig.bouncing) setTimeout(bounceOff, 300);   // 1 = a limit switch was hit: back off it
       for (const w of rig.waiters.splice(0)) w.fail(new Error(line)); return; }
-    if (line.startsWith('Grbl')) { stageMsg(`Connected: ${line}. Press Home (or Unlock).`); for (const w of rig.waiters.splice(0)) w.fail(new Error('reset')); }
+    if (line.startsWith('Grbl')) {
+      stageMsg(`Connected: ${line}.`); for (const w of rig.waiters.splice(0)) w.fail(new Error('reset'));
+      // The Arduino restarts whenever the page connects, so it never knows where the stage is: find the switches at
+      // once (Z goes up first, clear of the pod). Not after a reset the page made itself (Stop, backing off a switch).
+      if (!rig.bouncing && !rig.stopping && !rig.homing) setTimeout(() => { if (!rig.busy) $('stageHomeBtn').click(); }, 800);
+    }
     stageLog(line);
   }
   function stageLog(line) { const el = $('stageLog'), lines = (el.textContent + line + '\n').split('\n'); el.textContent = lines.slice(-40).join('\n'); el.scrollTop = el.scrollHeight; }
@@ -1758,7 +1770,7 @@ document.documentElement.lang = 'en';
   $('stageZLo').onchange = $('stageZHi').onchange = () => { const a = parseFloat($('stageZLo').value), b = parseFloat($('stageZHi').value); if (a < b) { stageLim.zlo = a; stageLim.zhi = b; } limSave(); };
   $('stageMaxYBtn').onclick = () => { if (!rig.homed) { stageMsg('Press Home first.'); return; } stageLim.y = +rig.pos[1].toFixed(1); limSave(); stageMsg(`Y limit set to ${stageLim.y} mm.`); };
   $('stageUnlockBtn').onclick = () => stageSend('$X').then(() => stageMsg('Unlocked (not homed: positions start from here).')).catch(e => stageMsg(e.message));
-  $('stageStopBtn').onclick = async () => { rig.scanStop = true; await stageRaw('\x85'); await stageRaw('!'); await sleepMs(200); await stageRaw('\x18'); stageMsg('Stopped. Press Home or Unlock.'); rig.busy = false; };
+  $('stageStopBtn').onclick = async () => { rig.scanStop = true; rig.stopping = true; await stageRaw('\x85'); await stageRaw('!'); await sleepMs(200); await stageRaw('\x18'); await sleepMs(1500); rig.stopping = false; rig.homed = false; stageMsg('Stopped. Press Home before scanning again.'); rig.busy = false; };
   // Jog (as in MicroScanner's jog buttons): a click moves one step; holding for 600 ms starts a continuous jog that
   // stops the moment the button is released (GRBL jog-cancel, 0x85). Arrow keys jog X/Y, Page Up/Down jog Z.
   // Every jog is cut short at the axis limit (after Home). rig.goal follows jogs still on their way.
@@ -1836,8 +1848,8 @@ document.documentElement.lang = 'en';
   // ---------- focus stack with Z: the microscope has a fixed lens, so Z is the focus ----------
   // The range is kept as offsets from the focus Z (where autofocus put it), so it follows the pod from shot to shot.
   let zStack = null;
-  try { zStack = JSON.parse(localStorage.getItem('eggZStack') || 'null'); } catch {}
-  try { $('stageStack').checked = localStorage.getItem('eggZStackOn') !== '0'; const v = localStorage.getItem('eggZStackStep'); if (v) $('stageStackStep').value = v; } catch {}
+  zStack = RIG.zStack; try { const z = JSON.parse(localStorage.getItem('eggZStack') || 'null'); if (z) zStack = z; } catch {}
+  try { $('stageStack').checked = localStorage.getItem('eggZStackOn') !== '0'; const v = localStorage.getItem('eggZStackStep'); $('stageStackStep').value = v || RIG.zStep; } catch {}
   $('stageStack').onchange = () => { try { localStorage.setItem('eggZStackOn', $('stageStack').checked ? '1' : '0'); } catch {} };
   $('stageStackStep').onchange = () => { try { localStorage.setItem('eggZStackStep', $('stageStackStep').value); } catch {} };
   const zStackStep = () => Math.max(0.02, Math.min(1, parseFloat($('stageStackStep').value) || 0.1));
