@@ -384,7 +384,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-22p'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-22q'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -446,7 +446,7 @@ document.documentElement.lang = 'en';
     const ph = { id: nextId++, name, blob, example: !!opts.example, status: 'waiting', points: [], bmp: null,
       key: rec ? rec.key : `${Date.now()}-${nextId}`, addedAt: rec ? rec.added : Date.now(),
       pod: rec ? rec.pod : opts.example ? 'Example' : podId, fix: rec && rec.fix || { removed: [], added: [] } };
-    ph.shot = rec ? rec.shot : opts.example ? 'A1' : nextShot(ph.pod);
+    ph.shot = rec ? rec.shot : opts.example ? 'A1' : opts.shot || nextShot(ph.pod);
     const stored = rec && rec.result;
     if (stored) Object.assign(ph, stored);
     photos.push(ph);
@@ -1952,7 +1952,7 @@ document.documentElement.lang = 'en';
     const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.95));
     const stamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '_');
     const name = `${podId.replace(/[^\w-]+/g, '_')}_${shot || 'extra'}_${stamp}${stacked ? '_stack' : ''}${tag}.jpg`;
-    addPhoto(blob, name, { select: false });
+    addPhoto(blob, name, { select: false, shot });   // the shot reserved when it was swept, not the next free one
     $('saveNote').textContent = `Captured ${name}.`;
     renderCaptureBtn(); renderShots();
   }
