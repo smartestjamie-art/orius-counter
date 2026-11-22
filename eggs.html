@@ -102,6 +102,7 @@
 
   aside { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
   .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+  .panel h3.sub { margin: 16px 0 6px; font-size: 12px; color: var(--muted); font-weight: 600; }
   .panel h2 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
   .count { display: flex; align-items: baseline; gap: 10px; }
   .count .n { font: 600 64px/1 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--accent); }
@@ -165,8 +166,8 @@
     </nav>
     <h1>Egg Counter <span>· Orius eggs on a bean pod</span></h1>
     <div class="actions">
-      <button id="cameraBtn" hidden>Use camera</button>
-      <button id="addBtn" class="primary">Add photos…</button>
+      <button id="cameraBtn" class="primary" hidden>Use camera</button>
+      <button id="addBtn">Add photos…</button>
       <input id="fileInput" type="file" accept="image/*" multiple hidden>
     </div>
   </header>
@@ -191,75 +192,43 @@
     </section>
 
     <aside>
-      <div class="panel" aria-live="polite">
-        <div class="count"><span class="n" id="countN">–</span><span class="unit">eggs on this shot</span></div>
-        <div class="count"><span class="n pod" id="podN">–</span><span class="unit" id="podUnit">eggs on the pod</span></div>
-        <div class="meta" id="countMeta"></div>
+      <div class="panel" id="stagePanel">
+        <h2>Scan</h2>
+        <p class="note" id="stageNoSerial" hidden>The stage needs Chrome or Edge on a computer (not Safari, Firefox, a phone or a tablet).</p>
+        <div id="stageBody">
+          <div class="row"><button class="primary" id="stageConnectBtn">Connect stage</button><span class="meta" id="stageStatus" style="margin:0">Not connected</span></div>
+          <div class="field" style="margin-top:10px"><label for="podId">Pod ID</label><input type="text" id="podId" spellcheck="false" autocomplete="off"></div>
+          <div id="stageCtl" hidden>
+            <div class="row"><button class="primary" id="stageScanBtn">Scan this side</button><button id="stageStopBtn" title="Stop all motion now">Stop</button></div>
+          </div>
+          <div class="row"><button class="small" id="flipBtn">Side B next</button><button class="small" id="newPodBtn">Next pod</button><button class="small" id="savePodPhotos">Save this pod's photos</button></div>
+          <p class="note" id="stageNote">1. Plug in the USB and switch on the 12 V. 2. Press Use camera (top right). 3. Press Connect stage (the first time on a computer, pick the Arduino's port); it finds its switches by itself in about 40 s.</p>
+          <p class="note" id="stageStackNote"></p>
+          <p class="note" id="saveNote"></p>
+          <p class="note">Per pod: lay it along the rails, its right end under the lens, press <b>Scan this side</b>; it runs to the pod's other end on its own. Turn the pod over, press <b>Side B next</b>, scan again, save, then <b>Next pod</b>. Photos stay in this browser until saved.</p>
+        </div>
       </div>
 
       <div class="panel">
-        <h2>Pod</h2>
-        <div class="field"><label for="podId">Pod ID</label><input type="text" id="podId" spellcheck="false" autocomplete="off"></div>
-        <div class="row"><button class="small" id="flipBtn">Side B next</button><button class="small" id="newPodBtn">Next pod</button></div>
-        <p class="note">Scan side A with the Stage panel, flip the pod, press <b>Side B next</b> and scan again. Then <b>Next pod</b>.</p>
-      </div>
-
-
-      <div class="panel" id="stagePanel">
-        <h2>Stage (X Y Z)</h2>
-        <p class="note" id="stageNoSerial" hidden>Motor control needs Chrome or Edge on a computer (Web Serial).</p>
-        <div id="stageBody">
-          <div class="row"><button class="small" id="stageConnectBtn">Connect stage</button><span class="meta" id="stageStatus" style="margin:0">Not connected</span></div>
-          <div id="stageCtl" hidden>
-            <div class="row" style="margin-top:8px">
-              <button class="small" id="stageHomeBtn" title="Find the Z, Y and X limit switches (Z first, upwards), set zero there, then come back to this position">Home</button>
-              <button class="small" id="stageUnlockBtn" title="Clear an alarm without homing">Unlock</button>
-              <button class="small" id="stageStopBtn" title="Stop all motion now">Stop</button>
-            </div>
-            <div class="field"><label for="stageStep">Jog step</label>
-              <select id="stageStep"><option>0.02</option><option>0.1</option><option selected>1</option><option>5</option><option>20</option></select></div>
-            <div class="row">
-              <button class="small" data-jog="X-1">X −</button><button class="small" data-jog="X1">X +</button>
-              <button class="small" data-jog="Y-1">Y −</button><button class="small" data-jog="Y1">Y +</button>
-              <button class="small" data-jog="Z1">Z ↑</button><button class="small" data-jog="Z-1">Z ↓</button>
-            </div>
-            <div class="field"><label for="stageAfRange">Focus range ± mm</label><input type="number" id="stageAfRange" value="1" min="0.1" max="10" step="0.1"></div>
-            <div class="row"><button class="small" id="stageAfBtn">Autofocus with Z</button></div>
-            <div class="field"><label for="stageMaxX">X limit mm (right of its switch)</label><input type="number" id="stageMaxX" value="300" min="10" max="400" step="1"></div>
-            <div class="field"><label for="stageMaxY">Y limit mm (back, before the column)</label><input type="number" id="stageMaxY" placeholder="set by Home" min="0" max="95" step="0.5"></div>
-            <div class="row"><button class="small" id="stageMaxYBtn" title="Make the tray's current position the furthest back it may go">Y limit = here</button></div>
-            <div class="field"><label for="stageZLo">Z lowest mm</label><input type="number" id="stageZLo" step="0.5"></div>
-            <div class="field"><label for="stageZHi">Z highest mm</label><input type="number" id="stageZHi" step="0.5"></div>
-            <div class="field"><label for="stageStartX">Scan start X mm</label><input type="number" id="stageStartX" value="0" step="0.1"></div>
-            <div class="row"><button class="small" id="stageHereBtn">Use current X</button></div>
-            <div class="field"><label for="stageStepX">X step per shot mm</label><input type="number" id="stageStepX" value="8" min="0.5" step="0.5"></div>
-            <div class="field"><label for="stageShots">Shots per side</label><select id="stageShots"></select></div>
-            <label class="check"><input type="checkbox" id="stageCentre" checked> Keep the pod centred with Y, and stop where the pod ends</label>
-            <label class="check"><input type="checkbox" id="stageAutoStep" checked> X step from the calibration (30 % overlap)</label>
-            <div class="row" style="margin-top:4px"><button class="small" id="stageCalBtn" title="With the pod in view: moves Y by 1 mm and back, and measures how far the pod moved in the picture">Calibrate (moves X and Y 3 mm)</button><span class="meta" id="stageCalNote" style="margin:0"></span></div>
-            <label class="check"><input type="checkbox" id="stageScanAf" checked> Autofocus at every shot</label>
-            <label class="check"><input type="checkbox" id="stageStack" checked> Focus stack with Z: shoot at several heights, align, merge</label>
-            <div class="field"><label for="stageStackStep">Stack step mm</label><input type="number" id="stageStackStep" value="0.1" min="0.02" max="1" step="0.02"></div>
-            <div class="row"><button class="small" id="stageStackRangeBtn" title="With the pod in focus: sweeps Z and finds the heights where each part of the pod is sharpest">Find Z stack range</button></div>
-            <p class="note" id="stageStackNote"></p>
-            <div class="row" style="margin-top:8px"><button class="primary" id="stageScanBtn">Scan this side</button></div>
-            <details style="margin-top:10px"><summary class="note" style="cursor:pointer">GRBL console (settings, $$, ?)</summary>
-              <div class="row" style="margin-top:6px"><input type="text" id="stageCmd" spellcheck="false" autocomplete="off" placeholder="$$" style="flex:1 1 140px;min-width:0"><button class="small" id="stageCmdBtn">Send</button></div>
-              <pre id="stageLog" style="margin:6px 0 0;max-height:180px;overflow:auto;font-size:12px;white-space:pre-wrap"></pre>
-            </details>
-          </div>
-          <p class="note" id="stageNote">Connect the Arduino by USB and switch on the 12 V, then press Connect stage (the first time on a computer, pick the Arduino's port). The stage then finds its switches by itself (Home: Z up first, then Y and X), about 40 s, and is ready to scan.</p>
-          <p class="note">Jog: click for one step, hold for continuous movement. Keys: ← → move X, ↑ ↓ move Y, Page Up/Down move Z. Captured photos carry the stage position in their file name.</p>
+        <h2>Adjust by hand</h2>
+        <div class="row">
+          <button class="small" id="stageHomeBtn" title="Find the Z, Y and X limit switches (Z first, upwards), then go to the start position">Home</button>
+          <button class="small" id="stageUnlockBtn" title="Clear an alarm without homing">Unlock</button>
         </div>
-      </div>
-      <div class="panel" id="cameraPanel" hidden>
-        <h2>Camera</h2>
-        <div class="row"><select id="camSelect" aria-label="Camera"></select></div>
-        <div class="row" style="margin-top:8px">
-          <button id="captureBtn" class="primary">Capture</button>
-          <button id="stopCamBtn">Stop camera</button>
+        <div class="field"><label for="stageStep">Jog step mm</label>
+          <select id="stageStep"><option>0.02</option><option>0.1</option><option selected>1</option><option>5</option><option>20</option></select></div>
+        <div class="row">
+          <button class="small" data-jog="X-1">X −</button><button class="small" data-jog="X1">X +</button>
+          <button class="small" data-jog="Y-1">Y −</button><button class="small" data-jog="Y1">Y +</button>
+          <button class="small" data-jog="Z1">Z ↑</button><button class="small" data-jog="Z-1">Z ↓</button>
         </div>
-        <div class="meta" id="streamMeta"></div>
+        <div class="field"><label for="stageAfRange">Focus range ± mm</label><input type="number" id="stageAfRange" value="1.5" min="0.1" max="10" step="0.1"></div>
+        <div class="row"><button class="small" id="stageAfBtn">Autofocus with Z</button></div>
+        <div id="cameraPanel" hidden>
+          <div class="row" style="margin-top:8px"><select id="camSelect" aria-label="Camera"></select></div>
+          <div class="row" style="margin-top:8px"><button class="small" id="captureBtn">Capture</button><button class="small" id="stopCamBtn">Stop camera</button></div>
+          <div class="meta" id="streamMeta"></div>
+          <div hidden>
         <div class="meta" id="focusMeta"></div>
         <div class="slider" id="focusRow" hidden>
           <label for="focus">Focus</label><output id="focusOut"></output>
@@ -276,36 +245,54 @@
         </div>
         <div class="row" id="focusConnect" hidden><button class="small" id="focusConnectBtn">Connect focus helper</button><a class="small" href="https://smartestjamie-art.github.io/orius-counter/orius_focus_helper.zip" download>Download focus helper for Mac</a></div>
         <p class="note" id="focusNote"></p>
+          </div>
+        </div>
+        <p class="note">Jog: click for one step, hold to keep moving. Keys: ← → X, ↑ ↓ Y, Page Up/Down Z. Every move stays inside the rig's limits.</p>
       </div>
 
       <div class="panel">
-        <h2>Overlap between shots</h2>
-        <label class="check"><input type="checkbox" id="autoOverlap"> Match neighbouring shots automatically</label>
-        <p class="note">Each overlap is split down the middle, so every egg is counted once (shaded parts are not counted).</p>
-        <p class="note" id="matchNote"></p>
-        <details style="margin-top:6px"><summary class="note" style="cursor:pointer">More</summary>
-          <p class="note">Good matches are remembered and reused where a pair cannot be matched. Clear them after changing the X step.
-            For the most exact matching, stick a dotted <a href="tray_edge_strips.pdf" target="_blank">tray strip</a> (A4, 100 %) above and below the pod.</p>
-          <div class="row"><button class="small" id="forgetBtn">Forget remembered overlaps</button></div>
-          <p class="note">Without a match, count between these edges:</p>
-          <div class="field"><label for="trimPos">Shot</label><select id="trimPos"><option value="1">1</option></select></div>
-          <div class="slider"><label for="trimL">Count from</label><output id="trimLOut"></output><input type="range" id="trimL" min="0" max="50" step="1"></div>
-          <div class="slider"><label for="trimR">Count to</label><output id="trimROut"></output><input type="range" id="trimR" min="50" max="100" step="1"></div>
-        </details>
+        <h2>Rig settings</h2>
+        <p class="note">Measured on this rig and the same on every computer: change only when the rig itself changes.</p>
+        <div class="field"><label for="stageMaxX">X limit mm</label><input type="number" id="stageMaxX" value="300" min="10" max="400" step="1"></div>
+        <div class="field"><label for="stageMaxY">Y limit mm (column behind)</label><input type="number" id="stageMaxY" min="0" max="95" step="0.5"></div>
+        <div class="row"><button class="small" id="stageMaxYBtn" title="Make the tray's current position the furthest back it may go">Y limit = here</button></div>
+        <div class="field"><label for="stageZLo">Z lowest mm</label><input type="number" id="stageZLo" step="0.5"></div>
+        <div class="field"><label for="stageZHi">Z highest mm</label><input type="number" id="stageZHi" step="0.5"></div>
+        <div class="field"><label for="stageStartX">Scan start X mm</label><input type="number" id="stageStartX" value="1" step="0.1"></div>
+        <div class="row"><button class="small" id="stageHereBtn">Use current X</button></div>
+        <div class="field"><label for="stageStepX">X step per shot mm</label><input type="number" id="stageStepX" value="24" min="0.5" step="0.5"></div>
+        <div class="field"><label for="stageShots">Shots per side (most)</label><select id="stageShots"></select></div>
+        <label class="check"><input type="checkbox" id="stageCentre" checked> Keep the pod centred with Y, and stop where the pod ends</label>
+        <label class="check"><input type="checkbox" id="stageAutoStep" checked> X step from the calibration (30 % overlap)</label>
+            <div class="row" style="margin-top:4px"><button class="small" id="stageCalBtn" title="With the pod in view: moves Y by 1 mm and back, and measures how far the pod moved in the picture">Calibrate (moves X and Y 3 mm)</button><span class="meta" id="stageCalNote" style="margin:0"></span></div>
+        <label class="check"><input type="checkbox" id="stageScanAf" checked> Autofocus at every shot</label>
+        <label class="check"><input type="checkbox" id="stageStack" checked> Focus stack with Z, checked and topped up until every part is sharp</label>
+        <div class="field"><label for="stageStackStep">Stack step mm</label><input type="number" id="stageStackStep" value="0.3" min="0.02" max="1" step="0.02"></div>
+        <div class="row"><button class="small" id="stageStackRangeBtn" title="With the pod in focus: sweeps Z and finds the heights where each part of the pod is sharpest">Find Z stack range</button></div>
+        <details style="margin-top:10px"><summary class="note" style="cursor:pointer">GRBL console (settings, $$, ?)</summary>
+              <div class="row" style="margin-top:6px"><input type="text" id="stageCmd" spellcheck="false" autocomplete="off" placeholder="$$" style="flex:1 1 140px;min-width:0"><button class="small" id="stageCmdBtn">Send</button></div>
+              <pre id="stageLog" style="margin:6px 0 0;max-height:180px;overflow:auto;font-size:12px;white-space:pre-wrap"></pre>
+            </details>
       </div>
 
       <div class="panel">
-        <h2>Magnifier</h2>
+        <h2>Egg counting</h2>
+        <p class="note">Not in use yet: the scans are for sharp, complete pod pictures first.</p>
+        <div aria-live="polite">
+          <div class="count"><span class="n" id="countN">–</span><span class="unit">eggs on this shot</span></div>
+          <div class="count"><span class="n pod" id="podN">–</span><span class="unit" id="podUnit">eggs on the pod</span></div>
+          <div class="meta" id="countMeta"></div>
+        </div>
+        <label class="check"><input type="checkbox" id="showMarks"> Dots on detected eggs</label>
+        <label class="check"><input type="checkbox" id="showPod" checked> Pod outline</label>
+        <h3 class="sub">Magnifier</h3>
         <canvas class="mag" id="mag" aria-label="Magnified view of the photo under the pointer"></canvas>
         <div class="slider">
           <label for="magZoom">Zoom</label><output id="magOut">4×</output>
           <input type="range" id="magZoom" min="2" max="12" step="1" value="4">
         </div>
         <p class="note" id="magNote">Move the pointer over the photo to inspect the dots.</p>
-      </div>
-
-      <div class="panel">
-        <h2>Correct</h2>
+        <h3 class="sub">Correct</h3>
         <div class="row"><button id="fixBtn" aria-pressed="false">Correct mistakes</button></div>
         <p class="note">Strike out dots that are not eggs and add the ones it missed. The count follows your corrections.</p>
         <div class="key" id="fixKey" hidden>
@@ -314,10 +301,7 @@
         </div>
         <p class="note" id="fixNote"></p>
         <div class="row"><button class="small" id="fixClear">Clear on this photo</button></div>
-      </div>
-
-      <div class="panel">
-        <h2>Detection</h2>
+        <h3 class="sub">Detection</h3>
         <div class="slider">
           <label for="eggPx">Egg size (px across)</label><output id="eggPxOut"></output>
           <input type="range" id="eggPx" min="2" max="60" step="0.5">
@@ -332,34 +316,28 @@
         </div>
         <div class="row"><button class="small" id="autoSizeBtn">Auto egg size</button><button class="small" id="defaultsBtn">Defaults</button></div>
         <p class="note">Auto size is the photo width ÷ 660 (7 px on the Arducam 16MP on the rail), checked against eggs counted by eye. Photos taken with the stage use its calibration instead (an egg cap is taken as 0.1 mm across). Changes recount every photo.</p>
-      </div>
-
-      <div class="panel">
-        <h2>Show</h2>
-        <label class="check"><input type="checkbox" id="showMarks" checked> Dots on detected eggs</label>
-        <label class="check"><input type="checkbox" id="showPod" checked> Pod outline</label>
-      </div>
-
-      <div class="panel">
-        <h2>Save</h2>
-        <div class="row">
-          <button id="saveImg">Marked photo (JPG)</button>
-          <button id="saveCsv">Pods (CSV)</button>
-          <button id="saveShotsCsv">Shots (CSV)</button>
-          <button id="savePodPhotos">Original photos of this pod</button>
-        </div>
-        <p class="note">Photos are kept in this browser, so a refresh does not lose them.</p>
-        <p class="note" id="saveNote"></p>
+        <h3 class="sub">Overlap between shots (photos added by hand)</h3>
+        <label class="check"><input type="checkbox" id="autoOverlap"> Match neighbouring shots automatically</label>
+        <p class="note">Each overlap is split down the middle, so every egg is counted once (shaded parts are not counted).</p>
+        <p class="note" id="matchNote"></p>
+        <details style="margin-top:6px"><summary class="note" style="cursor:pointer">More</summary>
+          <p class="note">Good matches are remembered and reused where a pair cannot be matched. Clear them after changing the X step.
+            For the most exact matching, stick a dotted <a href="tray_edge_strips.pdf" target="_blank">tray strip</a> (A4, 100 %) above and below the pod.</p>
+          <div class="row"><button class="small" id="forgetBtn">Forget remembered overlaps</button></div>
+          <p class="note">Without a match, count between these edges:</p>
+          <div class="field"><label for="trimPos">Shot</label><select id="trimPos"><option value="1">1</option></select></div>
+          <div class="slider"><label for="trimL">Count from</label><output id="trimLOut"></output><input type="range" id="trimL" min="0" max="50" step="1"></div>
+          <div class="slider"><label for="trimR">Count to</label><output id="trimROut"></output><input type="range" id="trimR" min="50" max="100" step="1"></div>
+        </details>
+        <h3 class="sub">Save counts</h3>
+        <div class="row"><button class="small" id="saveImg">Marked photo (JPG)</button><button class="small" id="saveCsv">Pods (CSV)</button><button class="small" id="saveShotsCsv">Shots (CSV)</button></div>
       </div>
     </aside>
 
   <div class="panel photos-panel">
     <div id="stitchBox" hidden>
       <h2 id="stitchTitle">Stitched pod</h2>
-      <p class="note" style="margin-top:0">Each side's shots joined where they overlap: every part of the pod appears once, so
-        every egg is counted once. If a join shows a step or a repeated piece, drag its Overlap (and Up / down) until the
-        pod runs on smoothly and press Save for these shots: the stage steps the same way each time, so it holds for every pod, and
-        later pods are matched close to it.</p>
+      <p class="note" style="margin-top:0">Each side's shots placed by the stage's own positions, fine-matched where they overlap. Click the picture for full size.</p>
       <div id="stitchSides"></div>
     </div>
     <h2>Pods</h2>
@@ -406,7 +384,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-22g'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-22h'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -2221,8 +2199,8 @@ document.documentElement.lang = 'en';
   // ---------- side panels fold on a click on their heading (remembered) ----------
   {
     let shut = null;
-    try { shut = JSON.parse(localStorage.getItem('eggShut')); } catch {}
-    if (!Array.isArray(shut)) shut = ['Detection', 'Show']; // rarely needed, folded until asked for
+    try { shut = JSON.parse(localStorage.getItem('eggShut2')); } catch {}
+    if (!Array.isArray(shut)) shut = ['Adjust by hand', 'Rig settings', 'Egg counting']; // only Scan is open for everyday use
     for (const h of document.querySelectorAll('aside .panel > h2')) {
       const panel = h.parentElement, name = h.textContent.trim();
       panel.classList.toggle('shut', shut.includes(name));
@@ -2231,7 +2209,7 @@ document.documentElement.lang = 'en';
         const now = panel.classList.toggle('shut');
         h.setAttribute('aria-expanded', !now);
         shut = now ? [...new Set([...shut, name])] : shut.filter(n => n !== name);
-        try { localStorage.setItem('eggShut', JSON.stringify(shut)); } catch {}
+        try { localStorage.setItem('eggShut2', JSON.stringify(shut)); } catch {}
         if (!now) drawMag();
       };
       h.onclick = flip;
