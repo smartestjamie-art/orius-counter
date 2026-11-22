@@ -384,7 +384,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-22n'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-22o'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -433,8 +433,10 @@ document.documentElement.lang = 'en';
   // A short pod may need only 1 or 2 marks per side: "Side B next" (or any B shot already in) moves on to side B.
   const flipped = new Set();
   function onSideB(pod) { return flipped.has(pod) || photos.some(p => !p.example && p.pod === pod && (p.shot || '')[0] === 'B'); }
+  const reservedShots = new Set();   // 'pod|shot' taken by a scan whose picture is still being merged
   function nextShot(pod) {
     const used = new Set(photos.filter(p => !p.example && p.pod === pod).map(p => p.shot));
+    for (const r of reservedShots) if (r.startsWith(pod + '|')) used.add(r.slice(pod.length + 1));
     return SHOTS.filter(s => !onSideB(pod) || s[0] === 'B').find(s => !used.has(s)) || '';
   }
 
@@ -585,7 +587,8 @@ document.documentElement.lang = 'en';
     lim: { x: 300, y: 40, zlo: -22.5, zhi: -4, zRef: 'switch' },   // Z from its top switch (0 = 2 mm below it). Board in focus at -21.9, pod tops near -14.4 (22 Nov); curled or torn parts of a pod stand higher, up to about -9, so zhi keeps a margin
                                                                       // Y: the tray hit the column further back (22 Nov), pods lie near Y 23
     park: { x: 1, y: 23, z: -14.4 },   // where Home leaves the stage: the pod's line under the lens, in focus
-    zStack: { lo: -4.5, hi: 1.0 }, zStep: 0.3, zStackMax: 60,   // pod top in focus at -14.4, board at -21.9 (22 Nov): the pod's sides lie below the focus
+    zStack: { lo: -4.5, hi: 1.0 }, zStep: 0.3, zStackMax: 60,
+    sweep: { lo: -22.4, hi: -4.2, feed: 105, gap: 0.25 },   // focus stack: Z moves through this whole band without stopping (mm/min), a frame kept every 0.25 mm   // pod top in focus at -14.4, board at -21.9 (22 Nov): the pod's sides lie below the focus
   };
   let stageCal = RIG.cal;
   try { const c = JSON.parse(localStorage.getItem('eggStageCal') || 'null'); if (c && c.xu != null) stageCal = c; } catch {}
@@ -1572,7 +1575,7 @@ document.documentElement.lang = 'en';
     const zStacking = !!(rig.port && $('stageStack').checked);
     if (zStacking || (focusConnected && $('stackToggle').checked)) {
       capturing = true; $('captureBtn').disabled = true;
-      try { c = zStacking ? await zStackCapture() : await stackCapture(); stacked = !!c; }
+      try { c = zStacking ? (rig.homed ? await mergeSweep(await zSweepStack(true)) : await zStackCapture()) : await stackCapture(); stacked = !!c; }
       catch (err) { $(zStacking ? 'stageStackNote' : 'focusNote').textContent = 'Focus stack failed: ' + err.message; }
       capturing = false; $('captureBtn').disabled = false; renderCaptureBtn();
       if (!c) return;
@@ -1618,6 +1621,7 @@ document.documentElement.lang = 'en';
         rig.mpos = mp.slice(5).split(',').map(Number);
         if (!rig.zSet && stageLim.zRef !== 'switch') { rig.zSet = true; let z = 0; try { z = parseFloat(localStorage.getItem('eggStageZ')) || 0; } catch {} rig.zero[2] = rig.mpos[2] - z; }   // carry Z on from the last session
         rig.pos = rig.mpos.map((v, i) => v - rig.zero[i]);
+        if (rig.track) rig.track.push([performance.now(), rig.pos[2]]);
         if (rig.state === 'Idle' && rig.pos[2] !== rig.zSaved) { rig.zSaved = rig.pos[2]; try { localStorage.setItem('eggStageZ', rig.pos[2].toFixed(3)); } catch {} }
       }
       const pn = m.find(f => f.startsWith('Pn:')); rig.pins = pn ? pn.slice(3) : '';
@@ -1876,6 +1880,79 @@ document.documentElement.lang = 'en';
     try { localStorage.setItem('eggZStack3', JSON.stringify(zStack)); } catch {}
     zStackNote(); stageMsg($('stageStackNote').textContent);
   }
+  // Focus stack in one sweep. The pods always lie at the same height, so no autofocus: Z runs without stopping through
+  // the whole band where any part of a pod can be sharp (board to curled-up parts), and frames are kept every
+  // RIG.sweep.gap mm on the way. Each frame's height comes from the stage's reported positions around the moment it was
+  // taken. Every part of the pod (grid cell) has a sharpest frame; only those frames and their neighbours are merged.
+  // The check: parts whose sharpest frame is the first or last of the band are reported (they may lie outside it).
+  async function zSweepStack(up = true) {
+    if (!stream || !video.videoWidth) throw new Error('Start the camera first.');
+    const L = limitOf(2); if (!L) throw new Error('Press Home first.');
+    const S = RIG.sweep, lo = Math.max(L[0], S.lo), hi = Math.min(L[1], S.hi), from = up ? lo : hi, to = up ? hi : lo;
+    const t0 = performance.now();
+    await stageMoveTo({ z: from });
+    await nextFrame(); const cells = stackCells(video, video.videoWidth, video.videoHeight);
+    const dt = 1000 * S.gap / (S.feed / 60), frames = [];
+    rig.track = [[performance.now(), rig.pos[2]]];
+    let done = false, working = false, last = -1e9;
+    $('captureBtn').textContent = `Sweeping Z ${from.toFixed(1)} → ${to.toFixed(1)}…`;
+    const move = (async () => { try { await stageSend(`G90 G1 Z${(clampAx(2, to) + rig.zero[2]).toFixed(3)} F${S.feed}`); await stageIdle(); } finally { done = true; } })();
+    const grabbing = new Promise(res => {
+      const cb = (now, meta) => {
+        if (done) { res(); return; }
+        const t = (meta && (meta.captureTime || meta.expectedDisplayTime)) || now;
+        if (!working && t - last >= dt) {
+          working = true; last = t;
+          createImageBitmap(video).then(bmp => {
+            const sharp = regionSharpness(bmp, cells), oc = new OffscreenCanvas(bmp.width, bmp.height);
+            oc.getContext('2d').drawImage(bmp, 0, 0); bmp.close();
+            frames.push({ t, sharp, blob: oc.convertToBlob({ type: 'image/jpeg', quality: 0.95 }) });
+          }).catch(() => {}).finally(() => { working = false; });
+        }
+        video.requestVideoFrameCallback(cb);
+      };
+      video.requestVideoFrameCallback(cb);
+    });
+    await move; await grabbing; while (working) await sleepMs(20);
+    const tr = rig.track; rig.track = null; tr.push([performance.now(), rig.pos[2]]);
+    const zAt = t => { let i = tr.findIndex(p => p[0] >= t); if (i < 0) return tr[tr.length - 1][1]; if (i === 0) return tr[0][1];
+      const [ta, za] = tr[i - 1], [tb, zb] = tr[i]; return tb > ta ? za + (zb - za) * (t - ta) / (tb - ta) : zb; };
+    frames.forEach(f => { f.focus = zAt(f.t); });
+    frames.sort((a, b) => a.focus - b.focus);
+    if (frames.length < 3) throw new Error('The camera gave too few frames during the sweep.');
+    // keep each part's sharpest frame and its neighbours
+    const keep = new Set(), n = frames.length; let edgeLo = 0, edgeHi = 0, used = 0;
+    cells.cover.forEach((cv, c) => {
+      if (cv < STACK.cover) return;
+      const v = frames.map(f => f.sharp[c]), mx = Math.max(...v), mn = Math.min(...v);
+      if (!(mx > STACK.usefulNear * mn)) return;
+      used++; const k = v.indexOf(mx); keep.add(k - 1); keep.add(k); keep.add(k + 1);
+      if (k === 0) edgeLo++; else if (k === n - 1) edgeHi++;
+    });
+    let pick = frames.filter((f, i) => keep.has(i));
+    if (pick.length < 3) pick = frames.filter((f, i) => i % 2 === 0);
+    const sweptS = (performance.now() - t0) / 1000;
+    return { pick, all: n, used, edgeLo, edgeHi, zmin: frames[0].focus, zmax: frames[n - 1].focus, sweptS };
+  }
+  async function mergeSweep(sw) {
+    const t0 = performance.now();
+    for (const f of sw.pick) await stackCall({ type: 'stackAdd', blob: await f.blob, focus: f.focus });
+    const r = await stackCall({ type: 'stackEnd', ref: sw.pick.length >> 1 });
+    const need = Math.max(2, 0.03 * sw.used), soft = sw.edgeLo > need ? 'lowest' : sw.edgeHi > need ? 'highest' : '';
+    $('stageStackNote').textContent = `Swept Z ${sw.zmin.toFixed(1)} to ${sw.zmax.toFixed(1)} in ${sw.sweptS.toFixed(0)} s (${sw.all} frames), merged the ${sw.pick.length} that hold a sharp part in ${((performance.now() - t0) / 1000).toFixed(0)} s. ${Math.round(r.detail * 100)}% of the picture has detail. ` +
+      (soft ? `Some parts are sharpest at the ${soft} height of the band: they may stay soft.` : 'Check passed: every part of the pod peaks inside the band.');
+    const c = document.createElement('canvas'); c.width = r.width; c.height = r.height;
+    c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(r.rgba), r.width, r.height), 0, 0);
+    return c;
+  }
+  async function saveShot(c, shot, tag, stacked) {
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.95));
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '_');
+    const name = `${podId.replace(/[^\w-]+/g, '_')}_${shot || 'extra'}_${stamp}${stacked ? '_stack' : ''}${tag}.jpg`;
+    addPhoto(blob, name, { select: false });
+    $('saveNote').textContent = `Captured ${name}.`;
+    renderCaptureBtn(); renderShots();
+  }
   // Focus stack with a check. Each height's frame is scored per part of the pod (grid cells, pod pixels only). A part
   // whose sharpest frame is the lowest (or highest) height taken was not caught in focus: its sharp height lies beyond
   // the range. Then more heights are taken on that side, one step at a time (inside the Z limits), until every part
@@ -2081,7 +2158,8 @@ document.documentElement.lang = 'en';
     if (stageCal && $('stageAutoStep').checked) $('stageStepX').value = autoStepX().toFixed(1);
     const x0 = parseFloat($('stageStartX').value), dx = parseFloat($('stageStepX').value);
     if (!Number.isFinite(x0) || !(dx > 0)) throw new Error('Set the scan start and the X step.');
-    rig.scanStop = false; let n = 0, side = null;
+    rig.scanStop = false; let n = 0, side = null, up = true, merging = Promise.resolve(), t0 = performance.now();
+    const sweeping = $('stageStack').checked;
     while (!rig.scanStop) {
       const shot = nextShot(podId); if (!shot) break;
       const k = parseInt(shot.slice(1), 10) - 1;
@@ -2093,8 +2171,15 @@ document.documentElement.lang = 'en';
       await stageMoveTo({ x: xT }); await sleepMs(250);
       const seen = centre ? await stageCentrePod() : true;
       if (!seen) { if (n) { stageMsg('The pod ends here.'); break; } throw new Error('No pod in view at the start: move X (and Y) until it is.'); }
-      if ($('stageScanAf').checked) { const r = Math.min(1, parseFloat($('stageAfRange').value) || 1); await stageAutofocus(n ? Math.min(r, 0.8) : r, n > 0); }
-      await $('captureBtn').onclick(); while (capturing) await sleepMs(200);
+      if (sweeping) {   // sweep here, merge while the stage goes on to the next spot
+        const tag = stageTag(), key = podId + '|' + shot; reservedShots.add(key);
+        const sw = await zSweepStack(up); up = !up;
+        merging = merging.then(() => mergeSweep(sw)).then(c => saveShot(c, shot, tag, true))
+          .catch(err => { $('stageStackNote').textContent = `Merging ${shot} failed: ${err.message}`; }).finally(() => reservedShots.delete(key));
+      } else {
+        if ($('stageScanAf').checked) { const r = Math.min(1, parseFloat($('stageAfRange').value) || 1); await stageAutofocus(n ? Math.min(r, 0.8) : r, n > 0); }
+        await $('captureBtn').onclick(); while (capturing) await sleepMs(200);
+      }
       n++;
       await nextFrame();
       if (centre && (seen === 'tail' || !podRunsOn())) { stageMsg('The pod ends here.'); break; }   // its tail is in this shot
@@ -2102,7 +2187,9 @@ document.documentElement.lang = 'en';
     }
     const end = $('stageNote').textContent;
     if (n && !rig.scanStop) await stageMoveTo({ x: x0 });   // back to the start, ready for the other side
-    stageMsg(n ? `Scanned ${n} shot${n > 1 ? 's' : ''}${/ends here|outside the limit/.test(end) ? ' (' + end + ')' : ''}. Flip the pod and press Side B next, then Scan again.` : 'Nothing to scan: this side is complete.');
+    if (sweeping) { stageMsg('Merging the last shots…'); await merging; }
+    const mins = ((performance.now() - t0) / 60000).toFixed(1);
+    stageMsg(n ? `Scanned ${n} shot${n > 1 ? 's' : ''} in ${mins} min${/ends here|outside the limit/.test(end) ? ' (' + end + ')' : ''}. Flip the pod and press Side B next, then Scan again.` : 'Nothing to scan: this side is complete.');
   });
 
   $('flipBtn').onclick = () => { if (flipped.has(podId)) flipped.delete(podId); else flipped.add(podId); renderShots(); renderCaptureBtn(); };
