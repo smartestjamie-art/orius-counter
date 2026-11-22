@@ -212,7 +212,7 @@
           <div class="row"><button class="small" id="stageConnectBtn">Connect stage</button><span class="meta" id="stageStatus" style="margin:0">Not connected</span></div>
           <div id="stageCtl" hidden>
             <div class="row" style="margin-top:8px">
-              <button class="small" id="stageHomeBtn" title="Find the X and Y limit switches, set zero there, then come back to this position">Home</button>
+              <button class="small" id="stageHomeBtn" title="Find the Z, Y and X limit switches (Z first, upwards), set zero there, then come back to this position">Home</button>
               <button class="small" id="stageUnlockBtn" title="Clear an alarm without homing">Unlock</button>
               <button class="small" id="stageStopBtn" title="Stop all motion now">Stop</button>
             </div>
@@ -406,7 +406,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-21p'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-22a'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -1612,7 +1612,7 @@ document.documentElement.lang = 'en';
   const limSave = () => { try { localStorage.setItem('eggStageLim', JSON.stringify(stageLim)); } catch {} $('stageMaxX').value = stageLim.x; $('stageMaxY').value = stageLim.y ?? ''; $('stageZLo').value = stageLim.zlo; $('stageZHi').value = stageLim.zhi; };
   // Z has no switch: its position is remembered in the browser between sessions (the motors hold while powered and the
   // lead screw does not slip), so the Z band applies whether or not X and Y are homed.
-  const limitOf = i => i === 2 ? [stageLim.zlo, stageLim.zhi] : !rig.homed ? null : i === 0 ? [0, stageLim.x] : [0, stageLim.y ?? 95];
+  const limitOf = i => i === 2 ? (rig.homed || stageLim.zRef !== 'switch' ? [stageLim.zlo, stageLim.zhi] : null) : !rig.homed ? null : i === 0 ? [0, stageLim.x] : [0, stageLim.y ?? 95];
   const clampAx = (i, v) => { const L = limitOf(i); return L ? Math.max(L[0], Math.min(L[1], v)) : v; };
   const FEED = { X: 600, Y: 200, Z: 100 };   // real mm/min (drivers in full steps: $100=50, $101=$102=200). Z lifts the microscope: it stalls above ~120
   if (!('serial' in navigator)) { $('stageNoSerial').hidden = false; $('stageBody').hidden = true; }
@@ -1625,7 +1625,7 @@ document.documentElement.lang = 'en';
       const m = line.slice(1, -1).split('|'); rig.state = m[0];
       const mp = m.find(f => f.startsWith('MPos:')); if (mp) {
         rig.mpos = mp.slice(5).split(',').map(Number);
-        if (!rig.zSet) { rig.zSet = true; let z = 0; try { z = parseFloat(localStorage.getItem('eggStageZ')) || 0; } catch {} rig.zero[2] = rig.mpos[2] - z; }   // carry Z on from the last session
+        if (!rig.zSet && stageLim.zRef !== 'switch') { rig.zSet = true; let z = 0; try { z = parseFloat(localStorage.getItem('eggStageZ')) || 0; } catch {} rig.zero[2] = rig.mpos[2] - z; }   // carry Z on from the last session
         rig.pos = rig.mpos.map((v, i) => v - rig.zero[i]);
         if (rig.state === 'Idle' && rig.pos[2] !== rig.zSaved) { rig.zSaved = rig.pos[2]; try { localStorage.setItem('eggStageZ', rig.pos[2].toFixed(3)); } catch {} }
       }
@@ -1687,11 +1687,11 @@ document.documentElement.lang = 'en';
   // its switch while the status is polled, stops the moment the switch reads pressed, and backs off until it is free
   // plus 2 mm. That point is zero. Hard limits ($21) are off while seeking and on afterwards, as a backstop: a switch
   // touched later stops everything at once.
-  async function seekSwitch(ax, dist) {
+  async function seekSwitch(ax, dist, dir = -1) {   // dir: the side the switch is on (-1: minus, +1: plus)
     const pressed = async () => { await stageRaw('?'); await sleepMs(120); return rig.pins.includes(ax); };
-    const off = async mm => { await stageSend(`$J=G91 G21 ${ax}${mm} F${FEED[ax]}`); await stageIdle(); };
+    const off = async mm => { await stageSend(`$J=G91 G21 ${ax}${(-dir * mm).toFixed(3)} F${FEED[ax]}`); await stageIdle(); };
     if (await pressed()) { await off(4); if (await pressed()) throw new Error(`The ${ax} switch stays pressed: check it and its cable.`); }
-    await stageSend(`$J=G91 G21 ${ax}-${dist} F${FEED[ax]}`);
+    await stageSend(`$J=G91 G21 ${ax}${dir * dist} F${FEED[ax]}`);
     let hit = false;
     for (let t = 0; t < 3500 && !hit; t++) {
       await stageRaw('?'); await sleepMs(60);
@@ -1707,16 +1707,22 @@ document.documentElement.lang = 'en';
     try { await stageSend('$X'); } catch {}
     await stageRaw('?'); await sleepMs(250);
     const back = rig.mpos.slice();
+    const oldZero = rig.zero[2];
     rig.homed = false; await stageSend('$21=0');
+    // Z first, upwards: it lifts the microscope clear of the pod before anything moves under it.
+    stageMsg('Homing Z: up to its switch…'); await seekSwitch('Z', 100, 1);
     stageMsg('Homing Y: forwards to its switch…'); await seekSwitch('Y', 100);
     stageMsg('Homing X: left to its switch…'); await seekSwitch('X', 420);
     await stageRaw('?'); await sleepMs(250);
-    rig.zero = [rig.mpos[0], rig.mpos[1], rig.zero[2]]; rig.pos = [0, 0, rig.mpos[2] - rig.zero[2]]; rig.homed = true;
+    rig.zero = rig.mpos.slice(); rig.pos = [0, 0, 0]; rig.homed = true;   // Z 0 is 2 mm below its switch; the microscope works below it (negative Z)
+    // The Z band (where the pods are in focus) was kept relative to the remembered Z; the first time Z is homed it is
+    // moved onto the switch's zero, once. From then on it stays relative to the switch.
+    if (stageLim.zRef !== 'switch') { const d = oldZero - rig.zero[2]; stageLim.zlo = +(stageLim.zlo + d).toFixed(2); stageLim.zhi = +(Math.min(0, stageLim.zhi + d)).toFixed(2); stageLim.zRef = 'switch'; limSave(); }
     await stageSend('$21=1');
-    const rx = back[0] - rig.zero[0], ry = back[1] - rig.zero[1];
+    const rx = back[0] - rig.zero[0], ry = back[1] - rig.zero[1], rz = back[2] - rig.zero[2];
     if (stageLim.y == null) { stageLim.y = +(Math.max(0, ry) + 1).toFixed(1); limSave(); }   // first time: it was safe where it stood
-    stageMsg('Homed. Going back to where it was…'); await stageMoveTo({ x: rx, y: ry });
-    stageMsg(`Homed. Limits: X 0–${stageLim.x} mm, Y 0–${stageLim.y} mm from the switches Z ${stageLim.zlo} to ${stageLim.zhi} mm (kept from the last session).`);
+    stageMsg('Homed. Going back to where it was…'); await stageMoveTo({ x: rx, y: ry }); await stageMoveTo({ z: rz });
+    stageMsg(`Homed. Limits: X 0–${stageLim.x} mm, Y 0–${stageLim.y} mm, Z ${stageLim.zlo} to ${stageLim.zhi} mm (Z 0 is 2 mm below its switch).`);
   });
   limSave();
   $('stageMaxX').onchange = () => { const v = parseFloat($('stageMaxX').value); if (v > 0) stageLim.x = v; limSave(); };
