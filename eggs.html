@@ -406,7 +406,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-22c'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-22d'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -1802,7 +1802,9 @@ document.documentElement.lang = 'en';
     return `_X${rig.pos[0].toFixed(2)}_Y${rig.pos[1].toFixed(2)}_Z${rig.pos[2].toFixed(3)}${sc}`;
   }
   // console: any GRBL command or setting; replies (and $$ listings) show in the log
-  const sendTyped = () => { const c = $('stageCmd').value.trim(); if (!c || !rig.port) return; stageLog('> ' + c); stageSend(c).then(() => stageLog('ok')).catch(e => stageLog(e.message)); $('stageCmd').value = ''; };
+  const sendTyped = () => { const c = $('stageCmd').value.trim(); if (!c || !rig.port) return;
+    // typed moves bypass the limits: refused once homed (use the jog buttons, which stay inside them)
+    if (rig.homed && /^(\$J|G0|G1|G00|G01|G90|G91|G53)\b/i.test(c.replace(/\s+/g, ' ').replace(/^G9[01] /i, (m) => m).trim()) && /[XYZ]-?[\d.]/i.test(c)) { stageLog('> ' + c); stageLog('refused: typed moves can leave the safe limits. Use the jog buttons.'); $('stageCmd').value = ''; return; } stageLog('> ' + c); stageSend(c).then(() => stageLog('ok')).catch(e => stageLog(e.message)); $('stageCmd').value = ''; };
   $('stageCmdBtn').onclick = sendTyped; $('stageCmd').addEventListener('keydown', e => { if (e.key === 'Enter') sendTyped(); });
   $('stageHereBtn').onclick = () => { $('stageStartX').value = rig.pos[0].toFixed(2); };
   // Focus score: variance of the Laplacian of a lightly blurred grey ROI (MicroScanner's LoG metric), averaged over two
@@ -1854,6 +1856,93 @@ document.documentElement.lang = 'en';
   $('stageStackStep').onchange = () => { try { localStorage.setItem('eggZStackStep', $('stageStackStep').value); } catch {} };
   const zStackStep = () => Math.max(0.02, Math.min(1, parseFloat($('stageStackStep').value) || 0.1));
   const zStackNote = () => { $('stageStackNote').textContent = zStack ? `Stack range ${zStack.lo >= 0 ? '+' : ''}${zStack.lo.toFixed(2)} to +${zStack.hi.toFixed(2)} mm around the focus: ${zStackHeights(0).length} shots.` : 'No stack range yet: it is found at the first stacked shot.'; };
+  function zStackHeights(z0) {
+    const lo = z0 + zStack.lo, hi = z0 + zStack.hi, step = Math.max(zStackStep(), (hi - lo) / (STACK.maxShots - 1));
+    const out = []; for (let z = lo; z < hi - 1e-6; z += step) out.push(z); out.push(hi); return out;
+  }
+  // Sweep Z around the current focus; each part of the pod (grid cell) has its sharpest height; the stack spans them.
+  async function zStackRange() {
+    if (!stream || !$('video').videoWidth) throw new Error('Start the camera first.');
+    const z0 = rig.pos[2], range = Math.min(2, parseFloat($('stageAfRange').value) || 1), n = 20, pts = [];
+    await nextFrame(); const cells = stackCells(video, video.videoWidth, video.videoHeight);
+    await stageMoveTo({ z: z0 - range - 0.2 });
+    for (let i = 0; i <= n; i++) {
+      const z = z0 - range + 2 * range * i / n; await stageMoveTo({ z }); await sleepMs(300); await nextFrame();
+      pts.push([z, regionSharpness(video, cells)]); stageMsg(`Stack range: Z ${z.toFixed(3)} (${i + 1} of ${n + 1})`);
+    }
+    let peaks = cells.cover.map((cv, c) => {
+      if (cv < STACK.cover) return null;
+      let bi = 0, worst = Infinity; pts.forEach((p, i) => { if (p[1][c] > pts[bi][1][c]) bi = i; worst = Math.min(worst, p[1][c]); });
+      return pts[bi][1][c] > STACK.useful * worst ? pts[bi][0] : null;
+    }).filter(v => v != null).sort((a, b) => a - b);
+    const gap = 4 * 2 * range / n;   // one cell far from all the others (a speck, a reflection) does not stretch the range
+    while (peaks.length >= 5 && peaks[1] - peaks[0] > gap) peaks.shift();
+    while (peaks.length >= 5 && peaks[peaks.length - 1] - peaks[peaks.length - 2] > gap) peaks.pop();
+    await stageMoveTo({ z: z0 - 0.2 }); await stageMoveTo({ z: z0 });
+    if (!peaks.length) throw new Error('No part of the pod gets clearly sharper: focus on the pod first (Autofocus with Z).');
+    const m = zStackStep() / 2;
+    zStack = { lo: Math.min(0, peaks[0] - z0 - m), hi: Math.max(0, peaks[peaks.length - 1] - z0 + m) };
+    try { localStorage.setItem('eggZStack', JSON.stringify(zStack)); } catch {}
+    zStackNote(); stageMsg($('stageStackNote').textContent);
+  }
+  // Focus stack with a check. Each height's frame is scored per part of the pod (grid cells, pod pixels only). A part
+  // whose sharpest frame is the lowest (or highest) height taken was not caught in focus: its sharp height lies beyond
+  // the range. Then more heights are taken on that side, one step at a time (inside the Z limits), until every part
+  // peaks inside the range, and only then are all frames merged.
+  async function zStackCapture() {
+    if (!zStack) await zStackRange();
+    const z0 = rig.pos[2], zs = zStackHeights(z0), frames = [], step = zStackStep(), L = limitOf(2) || [-Infinity, Infinity];
+    await nextFrame(); const cells = stackCells(video, video.videoWidth, video.videoHeight);
+    const shoot = async (z, label) => {
+      $('captureBtn').textContent = label;
+      await stageMoveTo({ z }); await sleepMs(STACK.settle);
+      for (let k = 0; k < STACK.drain; k++) await nextFrame();
+      const a = (await nextFrame(), grabCanvas()), b = (await nextFrame(), grabCanvas());
+      const best = a.score >= b.score ? a.canvas : b.canvas;
+      frames.push({ focus: rig.pos[2], sharp: regionSharpness(best, cells), blob: new Promise(r => best.toBlob(r, 'image/jpeg', 0.95)) });
+    };
+    await stageMoveTo({ z: zs[0] - 0.2 });   // the first pass runs upwards from below (backlash taken up one way)
+    for (const z of zs) { if (!stream) break; await shoot(z, `Shooting ${frames.length + 1} of ${zs.length} (Z ${z.toFixed(3)})…`); }
+    // the check: parts that peak at the bottom or top frame
+    const edgeParts = () => {
+      const f = frames.slice().sort((p, q) => p.focus - q.focus), n = f.length; let lo = 0, hi = 0, used = 0;
+      cells.cover.forEach((cv, c) => {
+        if (cv < STACK.cover || n < 3) return;
+        const v = f.map(x => x.sharp[c]), mx = Math.max(...v), mn = Math.min(...v);
+        if (!(mx > STACK.usefulNear * mn)) return;   // plain parts (no texture) cannot tell
+        used++; const k = v.indexOf(mx);
+        if (k === 0 && v[0] > 1.1 * v[1]) lo++; else if (k === n - 1 && v[n - 1] > 1.1 * v[n - 2]) hi++;
+      });
+      return { lo, hi, used, zmin: f[0].focus, zmax: f[n - 1].focus };
+    };
+    let added = 0, chk = edgeParts();
+    const need = e => Math.max(2, 0.03 * e.used);
+    for (let k = 0; k < 8 && stream; k++) {
+      if (chk.lo > need(chk) && chk.zmin - step >= L[0] - 1e-6) {
+        const z = chk.zmin - step; await stageMoveTo({ z: z - 0.2 });
+        await shoot(z, `Check: ${chk.lo} parts sharpest at the lowest height, extra shot at Z ${z.toFixed(2)}…`); added++;
+      } else if (chk.hi > need(chk) && chk.zmax + step <= L[1] + 1e-6) {
+        const z = chk.zmax + step; await stageMoveTo({ z: z - 0.2 });
+        await shoot(z, `Check: ${chk.hi} parts sharpest at the highest height, extra shot at Z ${z.toFixed(2)}…`); added++;
+      } else break;
+      chk = edgeParts();
+    }
+    const unsure = chk.lo > need(chk) || chk.hi > need(chk);
+    await stageMoveTo({ z: z0 - 0.2 }); await stageMoveTo({ z: z0 });
+    // widen the remembered range when extra heights were needed, so the next shots start with them
+    if (added) { zStack = { lo: Math.min(zStack.lo, chk.zmin - z0), hi: Math.max(zStack.hi, chk.zmax - z0) }; try { localStorage.setItem('eggZStack', JSON.stringify(zStack)); } catch {} }
+    frames.sort((p, q) => p.focus - q.focus);
+    $('captureBtn').textContent = 'Aligning and merging…';
+    for (const f of frames) await stackCall({ type: 'stackAdd', blob: await f.blob, focus: f.focus });
+    const r = await stackCall({ type: 'stackEnd', ref: frames.length >> 1 });
+    const moved = Math.max(0, ...(r.shifts || []).map(a => Math.hypot(a.dx, a.dy)));
+    $('stageStackNote').textContent = `Stacked ${r.frames} shots at Z ${chk.zmin.toFixed(2)}–${chk.zmax.toFixed(2)}` +
+      (added ? ` (${added} extra after the check)` : '') + `, lined up (moved up to ${Math.round(moved)} px). ${Math.round(r.detail * 100)}% of the picture has detail.` +
+      (unsure ? ` Some parts are still sharpest at the ${chk.lo > need(chk) ? 'lowest' : 'highest'} height the Z limits allow: they may stay soft.` : ' Check passed: every part of the pod peaks inside the range.');
+    const c = document.createElement('canvas'); c.width = r.width; c.height = r.height;
+    c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(r.rgba), r.width, r.height), 0, 0);
+    return c;
+  }
   function zStackHeights(z0) {
     const lo = z0 + zStack.lo, hi = z0 + zStack.hi, step = Math.max(zStackStep(), (hi - lo) / (STACK.maxShots - 1));
     const out = []; for (let z = lo; z < hi - 1e-6; z += step) out.push(z); out.push(hi); return out;
