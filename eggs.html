@@ -384,7 +384,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-22q'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-22r'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -1928,10 +1928,13 @@ document.documentElement.lang = 'en';
       if (cv < STACK.cover) return;
       const v = frames.map(f => f.sharp[c]), mx = Math.max(...v), mn = Math.min(...v);
       if (!(mx > STACK.usefulNear * mn)) return;
-      used++; const k = v.indexOf(mx); keep.add(k - 1); keep.add(k); keep.add(k + 1);
+      used++; const k = v.indexOf(mx); for (let j = -2; j <= 2; j++) keep.add(k + j);
       if (k === 0) { if (frames[0].focus > S.board + 0.2) edgeLo++; } else if (k === n - 1) edgeHi++;   // below the board's focus nothing is missed
     });
-    let pick = frames.filter((f, i) => keep.has(i));
+    // every height from the lowest to the highest sharp part (a cell's surface slopes: its in-between heights matter too),
+    // all frames near a part's peak, every other one between
+    const ks = [...keep].filter(i => i >= 0 && i < n), k0 = Math.min(...ks), k1 = Math.max(...ks);
+    let pick = frames.filter((f, i) => i >= k0 && i <= k1 && (keep.has(i) || (i - k0) % 2 === 0));
     if (pick.length < 3) pick = frames.filter((f, i) => i % 2 === 0);
     const sweptS = (performance.now() - t0) / 1000;
     const view = frames.reduce((a, f) => Math.abs(f.focus - RIG.park.z) < Math.abs(a.focus - RIG.park.z) ? f : a).small;   // the pod near its usual focus, for the tail check
@@ -2189,7 +2192,7 @@ document.documentElement.lang = 'en';
       if (k + 1 >= MARKS) { stageMsg('outside the limit: more shots per side are needed for this pod.'); break; }
     }
     const end = $('stageNote').textContent;
-    if (n && !rig.scanStop) await stageMoveTo({ x: x0 });   // back to the start, ready for the other side
+    if (n && !rig.scanStop) await stageMoveTo(sweeping ? { x: x0, z: RIG.park.z } : { x: x0 });   // back to the start, ready for the other side
     if (sweeping) { stageMsg('Merging the last shots…'); await merging; }
     const mins = ((performance.now() - t0) / 60000).toFixed(1);
     stageMsg(n ? `Scanned ${n} shot${n > 1 ? 's' : ''} in ${mins} min${/ends here|outside the limit/.test(end) ? ' (' + end + ')' : ''}. Flip the pod and press Side B next, then Scan again.` : 'Nothing to scan: this side is complete.');
