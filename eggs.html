@@ -406,7 +406,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-22a'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-22b'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -1635,7 +1635,10 @@ document.documentElement.lang = 'en';
       return;
     }
     if (line === 'ok' || line.startsWith('error')) { const w = rig.waiters.shift(); if (w) (line === 'ok' ? w.ok() : w.fail(new Error('GRBL ' + line))); return; }
-    if (line.startsWith('ALARM')) { rig.homed = false; stageMsg(`${line}: a limit switch was hit or the stage was stopped. Press Home (or Unlock, then jog away from the switch).`); for (const w of rig.waiters.splice(0)) w.fail(new Error(line)); return; }
+    if (line.startsWith('ALARM')) {
+      rig.homed = false; stageMsg(`${line}: stopped.`);
+      if (/ALARM:1\b/.test(line) && !rig.homing && !rig.bouncing) setTimeout(bounceOff, 300);   // 1 = a limit switch was hit: back off it
+      for (const w of rig.waiters.splice(0)) w.fail(new Error(line)); return; }
     if (line.startsWith('Grbl')) { stageMsg(`Connected: ${line}. Press Home (or Unlock).`); for (const w of rig.waiters.splice(0)) w.fail(new Error('reset')); }
     stageLog(line);
   }
@@ -1687,6 +1690,30 @@ document.documentElement.lang = 'en';
   // its switch while the status is polled, stops the moment the switch reads pressed, and backs off until it is free
   // plus 2 mm. That point is zero. Hard limits ($21) are off while seeking and on afterwards, as a backstop: a switch
   // touched later stops everything at once.
+  // A limit switch hit while moving (hard limit, ALARM:1): GRBL stops everything and locks. Reset it, then move each
+  // pressed axis away from its switch (X and Y switches are on the minus side, Z's on the plus side) until it is free,
+  // plus 3 mm. Positions may be off by a little after the sudden stop, so Home is asked for afterwards.
+  const AWAY = { X: 1, Y: 1, Z: -1 };
+  async function bounceOff() {
+    if (rig.bouncing || !rig.port) return; rig.bouncing = true; rig.scanStop = true;
+    try {
+      stageMsg('A limit switch was hit: backing off…');
+      await sleepMs(500); for (const w of rig.waiters.splice(0)) w.fail(new Error('reset'));
+      await stageRaw('\x18'); await sleepMs(1500);
+      for (const w of rig.waiters.splice(0)) w.fail(new Error('reset'));
+      await stageSend('$21=0'); await stageSend('$X');
+      const pins = async () => { await stageRaw('?'); await sleepMs(150); return rig.pins; };
+      let p = await pins();
+      for (const ax of 'ZYX') if (p.includes(ax)) {
+        for (let k = 0; k < 10 && (await pins()).includes(ax); k++) { await stageSend(`$J=G91 G21 ${ax}${AWAY[ax]} F${FEED[ax]}`); await stageIdle(); }
+        if ((await pins()).includes(ax)) throw new Error(`The ${ax} switch does not release: check it.`);
+        await stageSend(`$J=G91 G21 ${ax}${AWAY[ax] * 3} F${FEED[ax]}`); await stageIdle();
+      }
+      await stageSend('$21=1');
+      stageMsg(`Backed off the ${p.replace(/[^XYZ]/g, '') || ''} switch. Press Home before scanning again.`);
+    } catch (e) { stageMsg('Backing off failed: ' + e.message + ' Press Stop, then Unlock and jog away by hand.'); }
+    finally { rig.bouncing = false; rig.homed = false; }
+  }
   async function seekSwitch(ax, dist, dir = -1) {   // dir: the side the switch is on (-1: minus, +1: plus)
     const pressed = async () => { await stageRaw('?'); await sleepMs(120); return rig.pins.includes(ax); };
     const off = async mm => { await stageSend(`$J=G91 G21 ${ax}${(-dir * mm).toFixed(3)} F${FEED[ax]}`); await stageIdle(); };
@@ -1703,12 +1730,13 @@ document.documentElement.lang = 'en';
     if (await pressed()) throw new Error(`The ${ax} switch did not release.`);
     await off(2);
   }
-  $('stageHomeBtn').onclick = e => stageRun(e.target, async () => {
+  $('stageHomeBtn').onclick = e => stageRun(e.target, async () => { try { await homeAll(); } finally { rig.homing = false; } });
+  async function homeAll() {
     try { await stageSend('$X'); } catch {}
     await stageRaw('?'); await sleepMs(250);
     const back = rig.mpos.slice();
     const oldZero = rig.zero[2];
-    rig.homed = false; await stageSend('$21=0');
+    rig.homed = false; rig.homing = true; await stageSend('$21=0');
     // Z first, upwards: it lifts the microscope clear of the pod before anything moves under it.
     stageMsg('Homing Z: up to its switch…'); await seekSwitch('Z', 100, 1);
     stageMsg('Homing Y: forwards to its switch…'); await seekSwitch('Y', 100);
@@ -1718,12 +1746,12 @@ document.documentElement.lang = 'en';
     // The Z band (where the pods are in focus) was kept relative to the remembered Z; the first time Z is homed it is
     // moved onto the switch's zero, once. From then on it stays relative to the switch.
     if (stageLim.zRef !== 'switch') { const d = oldZero - rig.zero[2]; stageLim.zlo = +(stageLim.zlo + d).toFixed(2); stageLim.zhi = +(Math.min(0, stageLim.zhi + d)).toFixed(2); stageLim.zRef = 'switch'; limSave(); }
-    await stageSend('$21=1');
+    await stageSend('$21=1'); rig.homing = false;
     const rx = back[0] - rig.zero[0], ry = back[1] - rig.zero[1], rz = back[2] - rig.zero[2];
     if (stageLim.y == null) { stageLim.y = +(Math.max(0, ry) + 1).toFixed(1); limSave(); }   // first time: it was safe where it stood
     stageMsg('Homed. Going back to where it was…'); await stageMoveTo({ x: rx, y: ry }); await stageMoveTo({ z: rz });
     stageMsg(`Homed. Limits: X 0–${stageLim.x} mm, Y 0–${stageLim.y} mm, Z ${stageLim.zlo} to ${stageLim.zhi} mm (Z 0 is 2 mm below its switch).`);
-  });
+  }
   limSave();
   $('stageMaxX').onchange = () => { const v = parseFloat($('stageMaxX').value); if (v > 0) stageLim.x = v; limSave(); };
   $('stageMaxY').onchange = () => { const v = parseFloat($('stageMaxY').value); stageLim.y = Number.isFinite(v) && v >= 0 ? v : null; limSave(); };
