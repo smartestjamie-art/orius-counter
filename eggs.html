@@ -384,7 +384,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-22l'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-22m'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -950,8 +950,9 @@ document.documentElement.lang = 'en';
   }
   let stitchSig = '';
   function renderStitch() {
-    const pod = selected && !selected.example ? selected.pod : podId;
-    const sides = ['A', 'B'].map(side => ({ side, shots: sideShots(pod, side) })).filter(x => x.shots.length >= 2);
+    // while the camera is on, show the pod being shot (it grows shot by shot); otherwise the pod of the photo opened
+    const pod = stream || !selected || selected.example ? podId : selected.pod;
+    const sides = ['A', 'B'].map(side => ({ side, shots: sideShots(pod, side) })).filter(x => x.shots.length >= 1);
     const sig = pod + '|' + JSON.stringify(settings.calib || {}) + '|' + $('showMarks').checked + '|' + sides.map(x => x.shots.map(p => [p.key, areaOf(p).map(Math.round), countOf(p)].join(':')).join(',')).join(';');
     if (sig === stitchSig) return;
     stitchSig = sig;
@@ -1131,12 +1132,12 @@ document.documentElement.lang = 'en';
 
   // ---------- pod ID ----------
   $('podId').value = podId;
-  $('podId').oninput = () => { podId = $('podId').value.trim() || 'Pod'; saveSettings(); renderShots(); };
+  $('podId').oninput = () => { podId = $('podId').value.trim() || 'Pod'; saveSettings(); renderShots(); renderStitch(); };
   $('newPodBtn').onclick = () => {
     const m = podId.match(/^(.*?)(\d+)$/);
     let next = m ? m[1] + (+m[2] + 1) : podId + ' 2';
     while (photos.some(p => p.pod === next)) { const k = next.match(/^(.*?)(\d+)$/); next = k[1] + (+k[2] + 1); }
-    podId = next; $('podId').value = podId; saveSettings(); renderShots();
+    podId = next; $('podId').value = podId; saveSettings(); renderShots(); renderStitch();
   };
 
   // ---------- overlap trim, per rail mark ----------
