@@ -384,7 +384,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-22u'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-22v'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -625,24 +625,28 @@ document.documentElement.lang = 'en';
     if (ph.edge4) return ph.edge4;
     const w = Math.round(ph.origW / 4), h = Math.round(ph.origH / 4), c = document.createElement('canvas'); c.width = w; c.height = h;
     const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(ph.bmp, 0, 0, w, h);
-    const d = ctx.getImageData(0, 0, w, h).data, g = new Float32Array(w * h), e = new Float32Array(w * h);
-    for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2];
+    const d = ctx.getImageData(0, 0, w, h).data, g = new Float32Array(w * h), e = new Float32Array(w * h), m = new Uint8Array(w * h);
+    for (let i = 0, j = 0; i < g.length; i++, j += 4) { g[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2]; m[i] = isPod(d[j], d[j + 1], d[j + 2]) ? 1 : 0; }
     for (let y = 2; y < h - 2; y++) for (let x = 2; x < w - 2; x++) { const i = y * w + x; e[i] = Math.abs(g[i + 2] - g[i - 2]) + Math.abs(g[i + 2 * w] - g[i - 2 * w]); }
-    return ph.edge4 = { e, w, h };
+    return ph.edge4 = { e, m, w, h };
   }
   function refineShift(a, b, s, dy) {
     if (!a.bmp || !b.bmp || a.origW !== b.origW || a.origH !== b.origH) return null;
-    const key = a.key + '|' + b.key + '|' + Math.round(s) + '|' + Math.round(dy), had = refined.get(key); if (had) return had;
-    const A = edgeMap(a), B = edgeMap(b), { w, h } = A, s0 = Math.round(s / 4), d0 = Math.round(dy / 4), R = 28;
-    let best = Infinity, bs = s0, bd = d0;
+    const key = a.key + '|' + b.key + '|' + Math.round(s) + '|' + Math.round(dy), had = refined.get(key); if (had !== undefined) return had || null;
+    // pod pixels only: the board's regular squares match themselves one square off (about 100 px) and pulled seams
+    // there; and +-160 px, since the board-dominated calibration reads the pod's scale about 5 % low
+    const A = edgeMap(a), B = edgeMap(b), { w, h } = A, s0 = Math.round(s / 4), d0 = Math.round(dy / 4), R = 40;
+    let best = Infinity, bs = s0, bd = d0, found = false;
     for (let sy = d0 - R; sy <= d0 + R; sy++) for (let sx = s0 - R; sx <= s0 + R; sx++) {
       const x0 = Math.max(3, 3 - sx), x1 = Math.min(w - 3, w - 3 - sx), y0 = Math.max(3, 3 - sy), y1 = Math.min(h - 3, h - 3 - sy);
       if (x1 - x0 < 30 || y1 - y0 < 60) continue;
       let sum = 0, n = 0;
-      for (let y = y0; y < y1; y += 3) { const rb = y * w, ra = (y + sy) * w + sx; for (let x = x0; x < x1; x += 3) { sum += Math.abs(A.e[ra + x] - B.e[rb + x]); n++; } }
-      const m = sum / n; if (m < best) { best = m; bs = sx; bd = sy; }
+      for (let y = y0; y < y1; y += 3) { const rb = y * w, ra = (y + sy) * w + sx; for (let x = x0; x < x1; x += 3) { if (!(A.m[ra + x] && B.m[rb + x])) continue; sum += Math.abs(A.e[ra + x] - B.e[rb + x]); n++; } }
+      if (n < 300) continue;   // too little pod in common to judge
+      const m = sum / n; if (m < best) { best = m; bs = sx; bd = sy; found = true; }
     }
-    const out = { s: bs * 4, dy: bd * 4, src: 'stage' };
+    if (!found) { refined.set(key, false); return null; }
+    const out = { s: bs * 4, dy: bd * 4, src: 'stage' };   // (stage + pictures: no hand sliders)
     refined.set(key, out); return out;
   }
   // shift used for the a-b overlap: the stage's own positions; else the match when clear, else the remembered shift
