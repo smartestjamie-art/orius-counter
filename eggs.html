@@ -384,7 +384,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-22i'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-22j'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -582,7 +582,7 @@ document.documentElement.lang = 'en';
   // keeps its own copy only once it has calibrated or changed something itself.
   const RIG = {
     cal: { du: -0.00208, dv: -0.03889, xu: 0.02917, xv: -0.00278, pxPerMm: 75.8, W: 2592, H: 1944 },   // picture moves for 1 mm of Y and X
-    lim: { x: 300, y: 40, zlo: -19.4, zhi: -8.9, zRef: 'switch' },   // from the switches; Z below its top switch (pods in focus near -16.5).
+    lim: { x: 300, y: 40, zlo: -22.5, zhi: -8.9, zRef: 'switch' },   // zlo: the board's surface is in focus at -21.9 (22 Nov); the pod's edges reach it   // from the switches; Z below its top switch (pods in focus near -16.5).
                                                                       // Y: the tray hit the column further back (22 Nov), pods lie near Y 23
     park: { x: 1, y: 23, z: -16.2 },   // where Home leaves the stage: the pod's line under the lens, in focus
     zStack: { lo: -1.65, hi: 1.65 }, zStep: 0.3,
@@ -1598,7 +1598,7 @@ document.documentElement.lang = 'en';
   // the move (jog, centring, scan). Z has no switch yet, so Z is not limited. Limits are kept in the browser.
   const AX = { X: 0, Y: 1, Z: 2 };
   const stageLim = { ...RIG.lim };   // Z: the band the pods' surface sits in (they all lie at one height), with room for focus stacks
-  try { const l = JSON.parse(localStorage.getItem('eggStageLim') || '{}'); if (l.zRef === 'switch') { Object.assign(stageLim, l); stageLim.y = Math.min(stageLim.y ?? RIG.lim.y, RIG.lim.y); } } catch {}   // never more Y than the rig allows   // older copies (Z without its switch) are ignored
+  try { const l = JSON.parse(localStorage.getItem('eggStageLim') || '{}'); if (l.zRef === 'switch') { Object.assign(stageLim, l); stageLim.y = Math.min(stageLim.y ?? RIG.lim.y, RIG.lim.y); stageLim.zlo = Math.max(stageLim.zlo, RIG.lim.zlo); } } catch {}   // never more Y than the rig allows   // older copies (Z without its switch) are ignored
   const limSave = () => { try { localStorage.setItem('eggStageLim', JSON.stringify(stageLim)); } catch {} $('stageMaxX').value = stageLim.x; $('stageMaxY').value = stageLim.y ?? ''; $('stageZLo').value = stageLim.zlo; $('stageZHi').value = stageLim.zhi; };
   // Z has no switch: its position is remembered in the browser between sessions (the motors hold while powered and the
   // lead screw does not slip), so the Z band applies whether or not X and Y are homed.
