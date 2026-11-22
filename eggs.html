@@ -384,7 +384,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-22h'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-22i'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -1926,58 +1926,6 @@ document.documentElement.lang = 'en';
     $('stageStackNote').textContent = `Stacked ${r.frames} shots at Z ${chk.zmin.toFixed(2)}–${chk.zmax.toFixed(2)}` +
       (added ? ` (${added} extra after the check)` : '') + `, lined up (moved up to ${Math.round(moved)} px). ${Math.round(r.detail * 100)}% of the picture has detail.` +
       (unsure ? ` Some parts are still sharpest at the ${chk.lo > need(chk) ? 'lowest' : 'highest'} height the Z limits allow: they may stay soft.` : ' Check passed: every part of the pod peaks inside the range.');
-    const c = document.createElement('canvas'); c.width = r.width; c.height = r.height;
-    c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(r.rgba), r.width, r.height), 0, 0);
-    return c;
-  }
-  function zStackHeights(z0) {
-    const lo = z0 + zStack.lo, hi = z0 + zStack.hi, step = Math.max(zStackStep(), (hi - lo) / (STACK.maxShots - 1));
-    const out = []; for (let z = lo; z < hi - 1e-6; z += step) out.push(z); out.push(hi); return out;
-  }
-  // Sweep Z around the current focus; each part of the pod (grid cell) has its sharpest height; the stack spans them.
-  async function zStackRange() {
-    if (!stream || !$('video').videoWidth) throw new Error('Start the camera first.');
-    const z0 = rig.pos[2], range = Math.min(2, parseFloat($('stageAfRange').value) || 1), n = 20, pts = [];
-    await nextFrame(); const cells = stackCells(video, video.videoWidth, video.videoHeight);
-    await stageMoveTo({ z: z0 - range - 0.2 });
-    for (let i = 0; i <= n; i++) {
-      const z = z0 - range + 2 * range * i / n; await stageMoveTo({ z }); await sleepMs(300); await nextFrame();
-      pts.push([z, regionSharpness(video, cells)]); stageMsg(`Stack range: Z ${z.toFixed(3)} (${i + 1} of ${n + 1})`);
-    }
-    let peaks = cells.cover.map((cv, c) => {
-      if (cv < STACK.cover) return null;
-      let bi = 0, worst = Infinity; pts.forEach((p, i) => { if (p[1][c] > pts[bi][1][c]) bi = i; worst = Math.min(worst, p[1][c]); });
-      return pts[bi][1][c] > STACK.useful * worst ? pts[bi][0] : null;
-    }).filter(v => v != null).sort((a, b) => a - b);
-    const gap = 4 * 2 * range / n;   // one cell far from all the others (a speck, a reflection) does not stretch the range
-    while (peaks.length >= 5 && peaks[1] - peaks[0] > gap) peaks.shift();
-    while (peaks.length >= 5 && peaks[peaks.length - 1] - peaks[peaks.length - 2] > gap) peaks.pop();
-    await stageMoveTo({ z: z0 - 0.2 }); await stageMoveTo({ z: z0 });
-    if (!peaks.length) throw new Error('No part of the pod gets clearly sharper: focus on the pod first (Autofocus with Z).');
-    const m = zStackStep() / 2;
-    zStack = { lo: Math.min(0, peaks[0] - z0 - m), hi: Math.max(0, peaks[peaks.length - 1] - z0 + m) };
-    try { localStorage.setItem('eggZStack', JSON.stringify(zStack)); } catch {}
-    zStackNote(); stageMsg($('stageStackNote').textContent);
-  }
-  async function zStackCapture() {
-    if (!zStack) await zStackRange();
-    const z0 = rig.pos[2], zs = zStackHeights(z0), frames = [];
-    await stageMoveTo({ z: zs[0] - 0.2 });   // always approach from below (backlash)
-    for (const z of zs) {
-      if (!stream) break;
-      $('captureBtn').textContent = `Shooting ${frames.length + 1} of ${zs.length} (Z ${z.toFixed(3)})…`;
-      await stageMoveTo({ z }); await sleepMs(STACK.settle);
-      for (let k = 0; k < STACK.drain; k++) await nextFrame();
-      const a = (await nextFrame(), grabCanvas()), b = (await nextFrame(), grabCanvas());
-      const best = a.score >= b.score ? a.canvas : b.canvas;
-      frames.push({ focus: z, blob: new Promise(r => best.toBlob(r, 'image/jpeg', 0.95)) });
-    }
-    await stageMoveTo({ z: z0 - 0.2 }); await stageMoveTo({ z: z0 });
-    $('captureBtn').textContent = 'Aligning and merging…';
-    for (const f of frames) await stackCall({ type: 'stackAdd', blob: await f.blob, focus: f.focus });
-    const r = await stackCall({ type: 'stackEnd', ref: frames.length >> 1 });
-    const moved = Math.max(0, ...(r.shifts || []).map(a => Math.hypot(a.dx, a.dy)));
-    $('stageStackNote').textContent = `Stacked ${r.frames} shots at Z ${zs[0].toFixed(2)}–${zs[zs.length - 1].toFixed(2)}, lined up (moved up to ${Math.round(moved)} px). ${Math.round(r.detail * 100)}% of the picture has detail.`;
     const c = document.createElement('canvas'); c.width = r.width; c.height = r.height;
     c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(r.rgba), r.width, r.height), 0, 0);
     return c;
