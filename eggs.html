@@ -37,6 +37,7 @@
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
+  .guideLink { align-self: center; color: var(--accent); font-weight: 600; text-decoration: none; padding: 0 6px; }
   body { background: var(--bg); color: var(--ink); font: 15px/1.45 var(--font-body); }
   .wrap { margin: 0 auto; padding-block: 18px 40px;
     padding-left: max(clamp(16px, 2vw, 32px), env(safe-area-inset-left, 0px)); padding-right: max(clamp(16px, 2vw, 32px), env(safe-area-inset-right, 0px));
@@ -168,6 +169,7 @@
     <div class="actions">
       <button id="cameraBtn" class="primary" hidden>Use camera</button>
       <button id="addBtn">Add photos…</button>
+      <a class="guideLink" href="guide.html" target="_blank" rel="noopener">Guide</a>
       <input id="fileInput" type="file" accept="image/*" multiple hidden>
     </div>
   </header>
@@ -384,7 +386,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-22w'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-22x'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;

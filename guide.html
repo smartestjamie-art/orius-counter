@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pod Scanner Guide</title>
+<style>
+  :root { --bg: #f2f4f1; --surface: #fff; --ink: #17201b; --muted: #5b675f; --line: #d8ded8; --accent: #0e7a4e; --soft: #e2f1e9; --warn: #a8701a; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0f1411; --surface: #171e1a; --ink: #e5ebe6; --muted: #98a59c; --line: #29332d; --accent: #3fbf86; --soft: #1b2a22; --warn: #e0a84a; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.55 "Helvetica Neue", Arial, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 28px 16px 60px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  h2 { font-size: 18px; margin: 28px 0 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+  ol, ul { padding-left: 22px; } li { margin: 5px 0; }
+  b.btn { display: inline-block; padding: 0 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font-weight: 600; font-size: 14px; white-space: nowrap; }
+  .box { background: var(--soft); border-radius: 10px; padding: 12px 16px; margin: 12px 0; }
+  .warn { border-left: 4px solid var(--warn); background: var(--surface); padding: 10px 14px; border-radius: 6px; margin: 12px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 15px; } td { border-top: 1px solid var(--line); padding: 8px 6px; vertical-align: top; }
+  td:first-child { width: 40%; font-weight: 600; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Pod Scanner Guide</h1>
+  <p class="sub">Photographing whole bean pods, sharp from end to end, with the motorised microscope rig. One side takes about 5 minutes.</p>
+
+  <div class="box"><b>Page:</b> <a href="eggs.html">smartestjamie-art.github.io/orius-counter/eggs.html</a><br>
+  Use <b>Chrome</b> or <b>Edge</b> (on Mac or Windows). Safari and Firefox cannot talk to the rig.</div>
+
+  <h2>1. Start of the day</h2>
+  <ol>
+    <li>Plug the rig's USB cable and the microscope's USB cable into the computer. Switch on the 12 V power.</li>
+    <li>Open the page in Chrome or Edge.</li>
+    <li>Press <b class="btn">Use camera</b> (top right). The live microscope picture appears.</li>
+    <li>Press <b class="btn">Connect stage</b>. The first time on a computer, pick the Arduino from the list.</li>
+    <li>Wait about 40 s: the rig finds its three limit switches by itself (Z up, then Y, then X) and parks. The status line then ends in <b>homed</b>.</li>
+  </ol>
+
+  <h2>2. Scanning one pod</h2>
+  <ol>
+    <li>Type the pod's name in <b>Pod ID</b> (for example <i>Pod 12</i>).</li>
+    <li>Lay the pod along the rails with its <b>right end under the lens</b>. Check in the live picture that the pod is in view.</li>
+    <li>Press <b class="btn">Scan this side</b>. The rig moves along the pod, takes a focus-stacked picture every 24 mm, and stops at the pod's tail. The stitched pod grows underneath the live picture as it goes.</li>
+    <li>When it says <i>Flip the pod</i>: turn the pod over, put its right end under the lens again, press <b class="btn">Side B next</b>, then <b class="btn">Scan this side</b>.</li>
+    <li>Press <b class="btn">Next pod</b>. This <b>saves the pod first</b> (one .zip in your Downloads folder), then moves on to the next pod's name.</li>
+  </ol>
+  <p>The first scan after opening the page starts with a short calibration (the stage moves 8 mm in X and Y and back). That is normal.</p>
+
+  <h2>3. Saving</h2>
+  <ul>
+    <li>Each pod is saved as one file: <b>Pod_12_YYYYMMDD.zip</b>, in your Downloads folder. It holds every shot as taken plus the stitched picture of each side.</li>
+    <li><b class="btn">Next pod</b> saves automatically. <b class="btn">Save this pod's photos</b> saves at any time.</li>
+    <li>The line under the buttons says whether the pod is saved yet.</li>
+    <li>Copy the day's .zip files to the shared drive before you leave. Photos also stay in this browser, but only on this computer.</li>
+  </ul>
+
+  <h2>4. If something goes wrong</h2>
+  <table>
+    <tr><td>Something is about to hit, or the rig makes a bad noise</td><td>Press <b class="btn">Stop</b>. Everything stops at once. Then press <b>Home</b> (under <i>Adjust by hand</i>) before scanning again.</td></tr>
+    <tr><td>“A limit signal flickered…”</td><td>Nothing to do: it finds its switches again and carries on with the scan by itself.</td></tr>
+    <tr><td>“A limit switch was hit: backing off…”</td><td>It moves off the switch by itself. Check nothing is in the way, then press <b>Home</b> and scan again. The scan carries on from the missing shots.</td></tr>
+    <tr><td>The live picture is black or frozen</td><td>Press <b class="btn">Use camera</b> again. If the wrong camera shows, choose <i>Digital Microscope</i> under <i>Adjust by hand</i>.</td></tr>
+    <tr><td>“Not connected” / Connect does nothing</td><td>Check the USB cable and the 12 V power, reload the page, press <b class="btn">Connect stage</b> again. Close any other tab that has the page open.</td></tr>
+    <tr><td>The scan stopped early, before the tail</td><td>Press <b class="btn">Scan this side</b> again: it continues from the next shot.</td></tr>
+    <tr><td>The pictures are blurred everywhere</td><td>The microscope's height may have changed (rig moved or knocked). Tell Jamie: the focus band needs measuring again.</td></tr>
+  </table>
+
+  <h2>5. Please don't</h2>
+  <div class="warn">
+    <ul>
+      <li>Don't turn the microscope's own focus or zoom ring. It is set and taped.</li>
+      <li>Don't push the slides by hand while the 12 V is on, and don't put anything behind the tray (the column is at the back).</li>
+      <li>Don't change anything under <i>Rig settings</i>.</li>
+      <li>Don't open the page in two tabs at once.</li>
+    </ul>
+  </div>
+
+  <h2>6. End of the day</h2>
+  <ol>
+    <li>Make sure the last pod is saved (press <b class="btn">Save this pod's photos</b> if the line says it is not).</li>
+    <li>Copy the .zip files to the shared drive.</li>
+    <li>Switch off the 12 V, then unplug the USB.</li>
+  </ol>
+</main>
+</body>
+</html>
