@@ -384,7 +384,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-22t'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-22u'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -2095,18 +2095,34 @@ document.documentElement.lang = 'en';
     }
     return { sx: bx, sy: by };
   }
+  // Shift between two 640-px grey pictures to a tenth of a pixel: coarse on 1/4-size copies, then fine around it,
+  // the minimum placed by a parabola through its neighbours.
+  function preciseShift(a, b, R) {
+    const down = (G, k) => { const w = Math.floor(G.w / k), h = Math.floor(G.h / k), g = new Float32Array(w * h);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { let t = 0; for (let j = 0; j < k; j++) for (let i = 0; i < k; i++) t += G.g[(y * k + j) * G.w + x * k + i]; g[y * w + x] = t / (k * k); }
+      return { g, w, h }; };
+    const c = pictureShift(down(a, 4), down(b, 4), R), { w, h } = a;
+    const cost = (sx, sy) => { let sum = 0, n = 0;
+      for (let y = Math.max(0, -sy) + 6; y < Math.min(h, h - sy) - 6; y += 2) { const ra = y * w, rb = (y + sy) * w + sx;
+        for (let x = Math.max(0, -sx) + 6; x < Math.min(w, w - sx) - 6; x += 2) { sum += Math.abs(a.g[ra + x] - b.g[rb + x]); n++; } }
+      return sum / n; };
+    let bx = 4 * c.sx, by = 4 * c.sy, best = Infinity;
+    for (let sy = 4 * c.sy - 5; sy <= 4 * c.sy + 5; sy++) for (let sx = 4 * c.sx - 5; sx <= 4 * c.sx + 5; sx++) { const m = cost(sx, sy); if (m < best) { best = m; bx = sx; by = sy; } }
+    const para = (m1, m0, p1) => { const d = m1 - 2 * m0 + p1; return d > 0 ? Math.max(-0.5, Math.min(0.5, (m1 - p1) / (2 * d))) : 0; };
+    return { sx: bx + para(cost(bx - 1, by), best, cost(bx + 1, by)), sy: by + para(cost(bx, by - 1), best, cost(bx, by + 1)) };
+  }
   // Calibration: move Y by 2 mm and measure how the WHOLE picture moved (board texture and pod together), so it works
   // however much of the pod is in view. Gives the picture's direction and scale for 1 mm of Y.
   async function stageCalibrate() {
     if (!stream || !$('video').videoWidth) throw new Error('Start the camera first.');
-    const v = $('video'), mm = 3;
+    const v = $('video'), mm = 8;   // 8 mm and 640-px pictures: the scale to about 0.2 %
     // one axis: move it by mm (towards the side with room), compare the picture before and after, come back
     const axis = async (k, i) => {
       const p0 = rig.pos[i], L = limitOf(i), step = L && p0 + mm > L[1] ? -mm : (i === 1 && !(L && p0 - mm < L[0]) ? -mm : mm);   // Y goes forwards when it can
-      await nextFrame(); await sleepMs(250); const a = grabGray();
-      await stageMoveTo({ [k]: p0 + step }); await sleepMs(500); await nextFrame(); const b = grabGray();
+      await nextFrame(); await sleepMs(250); const a = grabGray(640);
+      await stageMoveTo({ [k]: p0 + step }); await sleepMs(600); await nextFrame(); await nextFrame(); const b = grabGray(640);
       await stageMoveTo({ [k]: p0 }); await sleepMs(300);
-      const sh = pictureShift(a, b, 60);
+      const sh = preciseShift(a, b, 45);
       if (Math.hypot(sh.sx, sh.sy) < 3) throw new Error(`The picture did not move with ${k.toUpperCase()}: check that motor (12 V, cable), and that something with texture is in view.`);
       return [sh.sx / a.w / step, sh.sy / a.h / step];
     };
