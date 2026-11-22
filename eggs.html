@@ -406,7 +406,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-22e'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-22f'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -604,7 +604,9 @@ document.documentElement.lang = 'en';
   // keeps its own copy only once it has calibrated or changed something itself.
   const RIG = {
     cal: { du: -0.00208, dv: -0.03889, xu: 0.02917, xv: -0.00278, pxPerMm: 75.8, W: 2592, H: 1944 },   // picture moves for 1 mm of Y and X
-    lim: { x: 300, y: 80, zlo: -19.4, zhi: -8.9, zRef: 'switch' },   // from the switches; Z below its top switch (pods in focus near -16.5)
+    lim: { x: 300, y: 40, zlo: -19.4, zhi: -8.9, zRef: 'switch' },   // from the switches; Z below its top switch (pods in focus near -16.5).
+                                                                      // Y: the tray hit the column further back (22 Nov), pods lie near Y 23
+    park: { x: 1, y: 23, z: -16.2 },   // where Home leaves the stage: the pod's line under the lens, in focus
     zStack: { lo: -1.65, hi: 1.65 }, zStep: 0.3,
   };
   let stageCal = RIG.cal;
@@ -1615,7 +1617,7 @@ document.documentElement.lang = 'en';
   // the move (jog, centring, scan). Z has no switch yet, so Z is not limited. Limits are kept in the browser.
   const AX = { X: 0, Y: 1, Z: 2 };
   const stageLim = { ...RIG.lim };   // Z: the band the pods' surface sits in (they all lie at one height), with room for focus stacks
-  try { const l = JSON.parse(localStorage.getItem('eggStageLim') || '{}'); if (l.zRef === 'switch') Object.assign(stageLim, l); } catch {}   // older copies (Z without its switch) are ignored
+  try { const l = JSON.parse(localStorage.getItem('eggStageLim') || '{}'); if (l.zRef === 'switch') { Object.assign(stageLim, l); stageLim.y = Math.min(stageLim.y ?? RIG.lim.y, RIG.lim.y); } } catch {}   // never more Y than the rig allows   // older copies (Z without its switch) are ignored
   const limSave = () => { try { localStorage.setItem('eggStageLim', JSON.stringify(stageLim)); } catch {} $('stageMaxX').value = stageLim.x; $('stageMaxY').value = stageLim.y ?? ''; $('stageZLo').value = stageLim.zlo; $('stageZHi').value = stageLim.zhi; };
   // Z has no switch: its position is remembered in the browser between sessions (the motors hold while powered and the
   // lead screw does not slip), so the Z band applies whether or not X and Y are homed.
@@ -1750,7 +1752,6 @@ document.documentElement.lang = 'en';
   async function homeAll() {
     try { await stageSend('$X'); } catch {}
     await stageRaw('?'); await sleepMs(250);
-    const back = rig.mpos.slice();
     const oldZero = rig.zero[2];
     rig.homed = false; rig.homing = true; await stageSend('$21=0');
     // Z first, upwards: it lifts the microscope clear of the pod before anything moves under it.
@@ -1763,9 +1764,9 @@ document.documentElement.lang = 'en';
     // moved onto the switch's zero, once. From then on it stays relative to the switch.
     if (stageLim.zRef !== 'switch') { const d = oldZero - rig.zero[2]; stageLim.zlo = +(stageLim.zlo + d).toFixed(2); stageLim.zhi = +(Math.min(0, stageLim.zhi + d)).toFixed(2); stageLim.zRef = 'switch'; limSave(); }
     await stageSend('$21=1'); rig.homing = false;
-    const rx = back[0] - rig.zero[0], ry = back[1] - rig.zero[1], rz = back[2] - rig.zero[2];
-    if (stageLim.y == null) { stageLim.y = +(Math.max(0, ry) + 1).toFixed(1); limSave(); }   // first time: it was safe where it stood
-    stageMsg('Homed. Going back to where it was…'); await stageMoveTo({ x: rx, y: ry }); await stageMoveTo({ z: rz });
+    // Always end at the same parking place (not "back where it was": after the Arduino restarts that place is not
+    // known for sure, and Y going back blindly hit the column on 22 Nov).
+    stageMsg('Homed. Moving to the start position…'); await stageMoveTo({ x: RIG.park.x, y: Math.min(RIG.park.y, stageLim.y) }); await stageMoveTo({ z: RIG.park.z });
     stageMsg(`Homed. Limits: X 0–${stageLim.x} mm, Y 0–${stageLim.y} mm, Z ${stageLim.zlo} to ${stageLim.zhi} mm (Z 0 is 2 mm below its switch).`);
   }
   limSave();
