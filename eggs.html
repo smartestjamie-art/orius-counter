@@ -384,7 +384,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-22m'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-22n'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
   const pending = new Map(); let seq = 0;
@@ -585,7 +585,7 @@ document.documentElement.lang = 'en';
     lim: { x: 300, y: 40, zlo: -22.5, zhi: -4, zRef: 'switch' },   // Z from its top switch (0 = 2 mm below it). Board in focus at -21.9, pod tops near -14.4 (22 Nov); curled or torn parts of a pod stand higher, up to about -9, so zhi keeps a margin
                                                                       // Y: the tray hit the column further back (22 Nov), pods lie near Y 23
     park: { x: 1, y: 23, z: -14.4 },   // where Home leaves the stage: the pod's line under the lens, in focus
-    zStack: { lo: -4.5, hi: 1.0 }, zStep: 0.3, zStackMax: 30,   // pod top in focus at -14.4, board at -21.9 (22 Nov): the pod's sides lie below the focus
+    zStack: { lo: -4.5, hi: 1.0 }, zStep: 0.3, zStackMax: 60,   // pod top in focus at -14.4, board at -21.9 (22 Nov): the pod's sides lie below the focus
   };
   let stageCal = RIG.cal;
   try { const c = JSON.parse(localStorage.getItem('eggStageCal') || 'null'); if (c && c.xu != null) stageCal = c; } catch {}
@@ -1694,7 +1694,7 @@ document.documentElement.lang = 'en';
   // plus 3 mm. Positions may be off by a little after the sudden stop, so Home is asked for afterwards.
   const AWAY = { X: 1, Y: 1, Z: -1 };
   async function bounceOff() {
-    if (rig.bouncing || !rig.port || rig.aborted) return; rig.bouncing = true; rig.scanStop = true;
+    if (rig.bouncing || !rig.port || rig.aborted) return; rig.bouncing = true; rig.scanStop = true; let glitch = false;
     try {
       stageMsg('A limit switch was hit: backing off…');
       await sleepMs(500); for (const w of rig.waiters.splice(0)) w.fail(new Error('reset'));
@@ -1709,9 +1709,12 @@ document.documentElement.lang = 'en';
         await stageSend(`$J=G91 G21 ${ax}${AWAY[ax] * 3} F${FEED[ax]}`); await stageIdle();
       }
       await stageSend('$21=1');
-      stageMsg(`Backed off the ${p.replace(/[^XYZ]/g, '') || ''} switch. Press Home before scanning again.`);
+      glitch = !/[XYZ]/.test(p);
+      stageMsg(glitch ? 'A limit signal flickered but no switch was pressed (electrical noise on a switch wire): finding the switches again…'
+        : `Backed off the ${p.replace(/[^XYZ]/g, '')} switch. Press Home before scanning again.`);
     } catch (e) { stageMsg('Backing off failed: ' + e.message + ' Press Stop, then Unlock and jog away by hand.'); }
     finally { rig.bouncing = false; rig.homed = false; }
+    if (glitch) setTimeout(() => { if (!rig.busy && !rig.aborted) $('stageHomeBtn').click(); }, 500);
   }
   async function seekSwitch(ax, dist, dir = -1) {   // dir: the side the switch is on (-1: minus, +1: plus)
     const pressed = async () => { await stageRaw('?'); await sleepMs(120); return rig.pins.includes(ax); };
@@ -1905,7 +1908,7 @@ document.documentElement.lang = 'en';
     };
     let added = 0, chk = edgeParts();
     const need = e => Math.max(2, 0.03 * e.used);
-    for (let k = 0; k < 8 && stream; k++) {
+    for (let k = 0; k < 16 && stream; k++) {
       if (chk.lo > need(chk) && chk.zmin - step >= L[0] - 1e-6) {
         const z = chk.zmin - step; await stageMoveTo({ z: z - 0.2 });
         await shoot(z, `Check: ${chk.lo} parts sharpest at the lowest height, extra shot at Z ${z.toFixed(2)}…`); added++;
