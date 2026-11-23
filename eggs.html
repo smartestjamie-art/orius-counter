@@ -385,7 +385,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23y'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23z'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-3';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -2422,6 +2422,9 @@ document.documentElement.lang = 'en';
     const centre = $('stageCentre').checked;
     // the scale and angle place the shots: measured again at the first scan after the page opens (the microscope's
     // height or angle may have changed since: moved rig, straightened column), then kept
+    // bring the pod into the middle first (with the calibration kept from before), so the calibration below measures
+    // the pod and not the board's repeating squares (they gave Y 2 px/mm with only the pod's tip in a corner, 23 Nov)
+    if (stageCal && stageCal.du != null) { try { await stageCentrePod(); } catch {} }
     { // a pod must be in view at the start (else the calibration has only the plain board to measure)
       const v = $('video'), w = 160, h = Math.round(160 * v.videoHeight / v.videoWidth), c = document.createElement('canvas'); c.width = w; c.height = h;
       const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(v, 0, 0, w, h); const d = x.getImageData(0, 0, w, h).data; let g = 0;
