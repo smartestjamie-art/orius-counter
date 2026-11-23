@@ -398,7 +398,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23zk'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23zl'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-3';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -824,7 +824,9 @@ document.documentElement.lang = 'en';
   function areaOf(ph) {
     const [ta, tb] = trimOf(ph), W = ph.origW;
     let x0 = ta / 100 * W, x1 = tb / 100 * W;
-    if (settings.autoOverlap) {
+    // stage photos: always cut down the middle of each overlap (the setting was off, so overlaps counted twice and
+    // each frame's dark edge showed at the seams)
+    if (settings.autoOverlap || stagePos(ph)) {
       const next = neighbour(ph, 1), prev = neighbour(ph, -1);
       const mn = shiftFor(ph, next), mp = shiftFor(prev, ph);
       if (mn) { const c = (W + mn.s) / 2; if (mn.s > 0) x1 = c; else x0 = c; }
