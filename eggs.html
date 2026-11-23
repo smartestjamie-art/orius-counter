@@ -132,6 +132,14 @@
   td.name { overflow-wrap: anywhere; min-width: 150px; }
   .photos-panel table { min-width: 520px; }
   .stitch { margin: 8px 0 16px; }
+  #eggCheck { position: fixed; inset: 0; z-index: 1000; background: rgba(10,12,11,.96); color: #eee; display: flex; flex-direction: column; align-items: center; padding: 12px 16px; overflow: auto; }
+  #eggCheck .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 200px)); gap: 8px; margin: 10px 0; }
+  #eggCheck .tile { position: relative; border: 4px solid #333; border-radius: 6px; cursor: pointer; aspect-ratio: 1; overflow: hidden; }
+  #eggCheck .tile.yes { border-color: #2ecc71; }
+  #eggCheck .tile canvas { width: 100%; height: 100%; display: block; }
+  #eggCheck .tile b { position: absolute; left: 6px; top: 4px; font: 700 14px sans-serif; background: rgba(0,0,0,.6); padding: 1px 5px; border-radius: 3px; }
+  #eggCheck .tile.yes b::after { content: ' egg'; color: #2ecc71; }
+  #eggCheck p { max-width: 840px; text-align: center; margin: 4px 0; }
   .stitch .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-bottom: 6px; }
   .stitch .head b { font: 600 15px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--accent); }
   .stitch .head .meta { margin: 0; flex: 1 1 200px; }
@@ -339,6 +347,7 @@
   <div class="panel photos-panel">
     <div id="stitchBox" hidden>
       <h2 id="stitchTitle">Stitched pod</h2>
+      <div class="row"><button class="small" id="eggCheckBtn" title="Shows 48 enlarged spots of this pod; click the real eggs; gives this pod's corrected egg number">Check eggs on this pod (2 min)</button><span class="note" id="eggCheckNote" style="margin:0"></span></div>
       <p class="note" style="margin-top:0">Each side's shots placed by the stage's own positions, fine-matched where they overlap. Click the picture for full size.</p>
       <div id="stitchSides"></div>
     </div>
@@ -385,7 +394,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23zd'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23ze'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-3';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -513,7 +522,7 @@ document.documentElement.lang = 'en';
     let z = M.b; for (let i = 0; i < f.length; i++) z += M.w[i] * ((Number.isFinite(f[i]) ? f[i] : M.mu[i]) - M.mu[i]) / M.sg[i];
     return 1 / (1 + Math.exp(-z));
   }
-  function whiteEggs(bmp) {
+  function whiteEggs(bmp, wantNear = false) {
     const W = bmp.width, H = bmp.height, cx = new OffscreenCanvas(W, H).getContext('2d', { willReadFrequently: true }); cx.drawImage(bmp, 0, 0);
     const d = cx.getImageData(0, 0, W, H).data, n = W * H, m = new Float32Array(n);
     for (let i = 0, j = 0; i < n; i++, j += 4) m[i] = Math.min(d[j], d[j + 1], d[j + 2]);
@@ -523,7 +532,7 @@ document.documentElement.lang = 'en';
     for (let y = 0; y < H; y++) { const y0 = Math.max(0, y - R), y1 = Math.min(H, y + R + 1);
       for (let x = 0; x < W; x++) { const x0 = Math.max(0, x - R), x1 = Math.min(W, x + R + 1);
         D[y * W + x] = m[y * W + x] - (I[y1 * W1 + x1] - I[y0 * W1 + x1] - I[y1 * W1 + x0] + I[y0 * W1 + x0]) / ((x1 - x0) * (y1 - y0)); } }
-    const seen = new Uint8Array(n), pts = [], sizes = [], st = [];
+    const seen = new Uint8Array(n), pts = [], sizes = [], st = [], near = [];
     for (let i = 0; i < n; i++) {
       if (seen[i] || D[i] <= 25) continue;
       let a = 0, pk = 0, minx = 1e9, maxx = 0, miny = 1e9, maxy = 0; st.length = 0; st.push(i); seen[i] = 1;
@@ -539,11 +548,12 @@ document.documentElement.lang = 'en';
       if (k < 12 || g < 0.5 * k) continue;
       const ix = Math.round(ex), iy = Math.round(ey);
       if (ix < 32 || iy < 32 || ix >= W - 32 || iy >= H - 32) continue;
-      if (eggScore(d, W, ix, iy, dm, asp, fill, pk) < EGG_CUT) continue;
+      const sc = eggScore(d, W, ix, iy, dm, asp, fill, pk);
+      if (sc < EGG_CUT) { if (wantNear && sc >= 0.15) near.push([ex, ey]); continue; }
       pts.push([ex, ey]); sizes.push(dm);
     }
     sizes.sort((a, b) => a - b);
-    return { points: pts, eggD: sizes.length ? sizes[sizes.length >> 1] : 12 };
+    return { points: pts, near, eggD: sizes.length ? sizes[sizes.length >> 1] : 12 };
   }
   async function countPhoto(ph) {
     if (isStagePhoto(ph)) {
@@ -1110,6 +1120,72 @@ document.documentElement.lang = 'en';
     }
     return c;
   }
+  // ---------- egg check: a person marks a random sample, the pod's number is corrected from it ----------
+  // 24 spots the counter counted and 24 near-misses it did not (scored 0.15 up to the cut), mixed, shown enlarged with
+  // nothing to say which is which. Real eggs among the counted ones give the share of the count that is right; eggs
+  // among the near-misses give how many it misses there. The corrected number = counted x right share + near-misses x
+  // egg share, with a 95 % range from the sample sizes. Every answer is also kept for training (eggLabelsAll).
+  let eggChecks = {}; try { eggChecks = JSON.parse(localStorage.getItem('eggChecks') || '{}'); } catch {}
+  function eggCheckNote() {
+    const pod = selected && !selected.example && !stream ? selected.pod : podId, c = eggChecks[pod];
+    $('eggCheckNote').textContent = c ? `Checked ${c.date}: about ${c.est} real eggs (${c.lo}–${c.hi}); ${Math.round(100 * c.yC / c.nC)} % of the counted ones were eggs.` : '';
+  }
+  async function runEggCheck() {
+    const pod = selected && !selected.example && !stream ? selected.pod : podId;
+    const list = photos.filter(p => p.pod === pod && !p.example && p.status === 'done' && isStagePhoto(p));
+    if (!list.length) { $('eggCheckNote').textContent = 'No counted microscope photos of this pod yet.'; return; }
+    $('eggCheckNote').textContent = 'Picking spots…';
+    const counted = [], near = [];
+    for (const ph of list) {
+      await ensureBmps([ph]);
+      for (const [x, y] of marks(ph).kept) if (inArea(ph, x)) counted.push({ ph, x, y, c: 1 });
+      const r = whiteEggs(ph.bmp, true);
+      for (const [x, y] of r.near) if (inArea(ph, x)) near.push({ ph, x, y, c: 0 });
+      await new Promise(r2 => setTimeout(r2, 0));
+    }
+    const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+    const sample = shuffle([...shuffle(counted.slice()).slice(0, 24), ...shuffle(near.slice()).slice(0, 24)]);
+    if (!sample.length) { $('eggCheckNote').textContent = 'Nothing to check on this pod.'; return; }
+    $('eggCheckNote').textContent = '';
+    const ov = document.createElement('div'); ov.id = 'eggCheck'; document.body.appendChild(ov);
+    const yes = new Set(); let page = 0; const per = 16, pages = Math.ceil(sample.length / per);
+    const show = () => {
+      ov.innerHTML = `<h2 style="margin:4px 0">Egg check · ${pod} · page ${page + 1} of ${pages}</h2><p>Click every square whose <b>centre</b> is a real egg (green border). Leave the rest. Click again to undo.</p><div class="grid"></div><div class="row"></div>`;
+      const grid = ov.querySelector('.grid');
+      sample.slice(page * per, page * per + per).forEach((s, k) => {
+        const i = page * per + k, t = document.createElement('div'); t.className = 'tile' + (yes.has(i) ? ' yes' : '');
+        const c = document.createElement('canvas'); c.width = c.height = 256; const g = c.getContext('2d'); g.imageSmoothingQuality = 'high';
+        g.drawImage(s.ph.bmp, s.x - 32, s.y - 32, 64, 64, 0, 0, 256, 256);
+        g.strokeStyle = 'rgba(255,255,255,.8)'; g.lineWidth = 3;
+        for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) { g.beginPath(); g.moveTo(128 + dx * 60, 128 + dy * 60); g.lineTo(128 + dx * 38, 128 + dy * 38); g.stroke(); }
+        const n = document.createElement('b'); n.textContent = i + 1; t.append(c, n);
+        t.onclick = () => { if (yes.has(i)) yes.delete(i); else yes.add(i); t.classList.toggle('yes'); };
+        grid.appendChild(t);
+      });
+      const row = ov.querySelector('.row');
+      const btn = (label, fn, primary) => { const b = document.createElement('button'); b.textContent = label; if (primary) b.className = 'primary'; b.onclick = fn; row.appendChild(b); };
+      btn('Cancel', () => ov.remove());
+      if (page > 0) btn('Back', () => { page--; show(); });
+      if (page < pages - 1) btn('Next page', () => { page++; show(); }, true);
+      else btn('Done', () => finish(), true);
+    };
+    const finish = () => {
+      const C = sample.map((s, i) => ({ ...s, egg: yes.has(i) }));
+      const nC = C.filter(s => s.c).length, yC = C.filter(s => s.c && s.egg).length, nN = C.filter(s => !s.c).length, yN = C.filter(s => !s.c && s.egg).length;
+      const pC = nC ? yC / nC : 1, pN = nN ? yN / nN : 0;
+      const est = counted.length * pC + near.length * pN;
+      const se = Math.sqrt((nC ? counted.length ** 2 * pC * (1 - pC) / nC : 0) + (nN ? near.length ** 2 * pN * (1 - pN) / nN : 0));
+      const day = new Date().toISOString().slice(0, 10);
+      eggChecks[pod] = { date: day, counted: counted.length, near: near.length, nC, yC, nN, yN, est: Math.round(est), lo: Math.max(0, Math.round(est - 1.96 * se)), hi: Math.round(est + 1.96 * se) };
+      try { localStorage.setItem('eggChecks', JSON.stringify(eggChecks)); } catch {}
+      let all = []; try { all = JSON.parse(localStorage.getItem('eggLabelsAll') || '[]'); } catch {}
+      for (const s of C) all.push({ pod, shot: s.ph.shot, name: s.ph.name, x: Math.round(s.x), y: Math.round(s.y), egg: s.egg, counted: !!s.c, date: day });
+      try { localStorage.setItem('eggLabelsAll', JSON.stringify(all)); } catch {}
+      ov.remove(); eggCheckNote(); stitchSig = ''; renderStitch();
+    };
+    show();
+  }
+  $('eggCheckBtn').onclick = () => { if (!document.getElementById('eggCheck')) runEggCheck(); };
   let stitchSig = '';
   function renderStitch() {
     // while the camera is on, show the pod being shot (it grows shot by shot); otherwise the pod of the photo opened
@@ -1123,7 +1199,7 @@ document.documentElement.lang = 'en';
     $('stitchBox').hidden = !sides.length;
     const box = $('stitchSides'); box.textContent = '';
     if (!sides.length) return;
-    $('stitchTitle').textContent = `Stitched pod · ${pod}`;
+    $('stitchTitle').textContent = `Stitched pod · ${pod}`; eggCheckNote();
     for (const { side, shots } of sides) {
       const parts = stitchLayout(shots), total = shots.reduce((t, p) => t + (countOf(p) || 0), 0);
       const joins = shots.slice(1).map((b, i) => { const sh = shiftFor(shots[i], b); return sh ? { stage: 'stage position', match: 'matched', strip: 'matched on strip', set: 'set by hand', learned: 'remembered' }[sh.src] : 'mark edges'; });
