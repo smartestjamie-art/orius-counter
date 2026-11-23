@@ -385,7 +385,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23l'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23m'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-2';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -2370,7 +2370,14 @@ document.documentElement.lang = 'en';
     }
     if (!rig.calOk || !stageCal || stageCal.xu == null || stageCal.W !== $('video').videoWidth) await stageCalibrate();
     if (stageCal && $('stageAutoStep').checked) $('stageStepX').value = autoStepX().toFixed(1);
-    const x0 = parseFloat($('stageStartX').value), dx = parseFloat($('stageStepX').value);
+    // A side starts where the stage is now (move it so the pod's right end is in the middle of the picture, then press
+    // Scan). A side already begun carries on from its own remembered start, so its shots keep their spacing.
+    const dx = parseFloat($('stageStepX').value), first = nextShot(podId), k0 = first ? parseInt(first.slice(1), 10) - 1 : 0;
+    let starts = {}; try { starts = JSON.parse(localStorage.getItem('eggSideStart') || '{}'); } catch {}
+    const sideKey = podId + '|' + (first || 'A')[0];
+    const x0 = k0 === 0 ? +rig.pos[0].toFixed(2) : starts[sideKey] ?? parseFloat($('stageStartX').value);
+    if (k0 === 0) { starts[sideKey] = x0; try { localStorage.setItem('eggSideStart', JSON.stringify(starts)); } catch {} }
+    $('stageStartX').value = x0;
     if (!Number.isFinite(x0) || !(dx > 0)) throw new Error('Set the scan start and the X step.');
     rig.yWarn = null; rig.scanning = true; rig.scanStop = false; let n = 0, side = null, up = true, view = null, merging = Promise.resolve(), t0 = performance.now();
     const sweeping = $('stageStack').checked;
