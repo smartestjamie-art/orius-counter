@@ -385,7 +385,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23zb'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23zc'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-3';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -1927,7 +1927,7 @@ document.documentElement.lang = 'en';
     await off(2);
   }
   $('stageHomeBtn').onclick = e => stageRun(e.target, async () => {
-    try { await homeAll(); } finally { rig.homing = false; }
+    try { await homeAll(); } catch (err) { try { localStorage.removeItem('eggLastPos'); } catch {} throw err; } finally { rig.homing = false; }   // a failed Home leaves the place unknown
     // a scan cut short by a flicker on a switch wire carries on by itself (its missing shots), at most 3 times a scan
     if (rig.resume) { rig.resume = false; if ((rig.resumes = (rig.resumes || 0) + 1) <= 3) { stageMsg('Carrying on with the scan where it stopped…'); setTimeout(() => $('stageScanBtn').click(), 800); } }
   });
