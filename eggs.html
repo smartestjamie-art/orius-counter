@@ -385,7 +385,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23o'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23p'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-2';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -2287,8 +2287,8 @@ document.documentElement.lang = 'en';
       if (Math.hypot(sh.sx, sh.sy) < 3) throw new Error(`The picture did not move with ${k.toUpperCase()}: check that motor (12 V, cable), and that something with texture is in view.`);
       return [sh.sx / a.w / step, sh.sy / a.h / step];
     };
-    stageMsg('Calibrating: moving Y 3 mm and back…'); const [du, dv] = await axis('y', 1);
-    stageMsg('Calibrating: moving X 3 mm and back…'); const [xu, xv] = await axis('x', 0);
+    stageMsg('Calibrating: moving Y 8 mm and back…'); const [du, dv] = await axis('y', 1);
+    stageMsg('Calibrating: moving X 8 mm and back…'); const [xu, xv] = await axis('x', 0);
     const py = Math.hypot(du * v.videoWidth, dv * v.videoHeight), px = Math.hypot(xu * v.videoWidth, xv * v.videoHeight), pxPerMm = (px + py) / 2;
     if (Math.abs(px - py) > 0.15 * pxPerMm) throw new Error(`X and Y give different scales (${px.toFixed(0)} and ${py.toFixed(0)} px/mm): one of them is not moving freely. Check and calibrate again.`);
     stageCal = { du, dv, xu, xv, pxPerMm, W: v.videoWidth, H: v.videoHeight };
@@ -2357,47 +2357,38 @@ document.documentElement.lang = 'en';
     let n = 0; for (let y = 0; y < h; y++) for (let x = x0; x < x0 + 8; x++) { const j = (y * w + x) * 4; if (isPod(d[j], d[j + 1], d[j + 2])) n++; }
     return n > 0.03 * 8 * h;
   }
-  // The black line drawn across the pod at its right end marks where a side starts. Its place in the picture: the
-  // columns (across the pod's length) holding many very dark pixels (marker ink; brown spots and shadows are lighter).
-  function markColumn() {
-    const v = $('video'), w = 320, h = Math.round(320 * v.videoHeight / v.videoWidth);
-    const c = markColumn.c || (markColumn.c = document.createElement('canvas')); c.width = w; c.height = h;
+  // Where a side starts: the pod's own right end (its green, not a drawn mark: the board's dark ends looked like
+  // marks, 23 Nov). podEnd() gives the pod's last column on the side where the pod ends in the picture, as a fraction
+  // of the width, or null when the pod runs on past that edge (or there is no pod).
+  function podEnd(side) {   // side: +1 the pod's end is towards the right of the picture, -1 towards the left
+    const v = $('video'), w = 160, h = Math.round(160 * v.videoHeight / v.videoWidth);
+    const c = podEnd.c || (podEnd.c = document.createElement('canvas')); c.width = w; c.height = h;
     const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(v, 0, 0, w, h);
     const d = x.getImageData(0, 0, w, h).data, col = new Float32Array(w);
-    for (let y = 0; y < h; y++) for (let i = 0; i < w; i++) { const j = (y * w + i) * 4; if (Math.max(d[j], d[j + 1], d[j + 2]) < 60) col[i]++; }
-    let best = -1, bv = 0;
-    for (let i = 2; i < w - 2; i++) { const s3 = col[i - 1] + col[i] + col[i + 1]; if (s3 > bv) { bv = s3; best = i; } }
-    return bv >= 3 * 0.08 * h ? best / w : null;   // as a fraction of the width, or null when there is no line
+    for (let y = 0; y < h; y++) for (let i = 0; i < w; i++) { const j = (y * w + i) * 4; if (isPod(d[j], d[j + 1], d[j + 2])) col[i]++; }
+    const min = 0.04 * h; let any = 0; for (let i = 0; i < w; i++) if (col[i] > min) any++;
+    if (any < 0.1 * w) return null;
+    if (side > 0) { let k = w - 1; while (k >= 0 && col[k] <= min) k--; return k >= w - 3 ? null : (k + 1) / w; }
+    let k = 0; while (k < w && col[k] <= min) k++; return k <= 2 ? null : k / w;
   }
-  // From where the stage is, step X along the pod (15 mm, less than half a picture) until the line shows, then put it
-  // near the picture's edge where the pod ends, so the first shot starts right at it. Y is centred at each step.
+  // From where the stage is, move X so the view travels towards the pod's end (against the scan direction), 12 mm at
+  // a time, until the pod stops inside the picture; then place its tip near that edge. Y is centred on the way.
   async function findStartMark() {
     if (!stageCal || stageCal.xu == null) return false;
-    const pxPerMmX = stageCal.xu;   // the line's place moves by this fraction of the width per mm of X
-    const edge = pxPerMmX > 0 ? 0.9 : 0.1;   // the pod runs on towards the other side: the line goes near this edge
-    const L = limitOf(0) || [0, 300], x0 = rig.pos[0];
-    // where to look: here, then towards the pod's right end (the view moves that way with X against the scan
-    // direction) down to the X limit, then the other way from here
-    const back = pxPerMmX > 0 ? -1 : 1, spots = [x0];
-    for (let x = x0 + back * 15; x >= L[0] - 1e-6 && x <= L[1] + 1e-6 && spots.length < 8; x += back * 15) spots.push(x);
-    if ((spots[spots.length - 1] - x0) * back < 15 && Math.abs(spots[spots.length - 1] - (back < 0 ? L[0] : L[1])) > 1) spots.push(back < 0 ? L[0] : L[1]);
-    for (let x = x0 - back * 15; x >= L[0] && x <= L[1] && spots.length < 14; x -= back * 15) spots.push(x);
-    for (const xs of spots) {
-      if (rig.scanStop) break;
-      if (Math.abs(xs - rig.pos[0]) > 0.05) { stageMsg(`Looking for the black start line: X ${xs.toFixed(0)}…`); await stageMoveTo({ x: xs }); await sleepMs(250); }
+    const xu = stageCal.xu, side = xu > 0 ? 1 : -1, edge = side > 0 ? 0.92 : 0.08, L = limitOf(0) || [0, 300];
+    for (let i = 0; i < 25 && !rig.scanStop; i++) {
       await stageCentrePod(); await nextFrame(); await nextFrame();
-      let f = markColumn();
+      const f = podEnd(side);
       if (f != null) {
-        for (let k = 0; k < 3 && f != null; k++) {   // bring it to the edge (twice more, to settle)
-          const dX = (edge - f) / pxPerMmX; if (Math.abs(dX) < 0.3) break;
-          await stageMoveTo({ x: Math.max(L[0], Math.min(L[1], rig.pos[0] + dX)) }); await sleepMs(300); await nextFrame(); await nextFrame();
-          f = markColumn();
-        }
-        stageMsg(`Found the black start line: starting at X ${rig.pos[0].toFixed(1)}.`); return true;
+        const dX = (edge - f) / xu;
+        if (Math.abs(dX) > 0.3) { await stageMoveTo({ x: Math.max(L[0], Math.min(L[1], rig.pos[0] + dX)) }); await sleepMs(250); }
+        stageMsg(`Found the pod's end: starting at X ${rig.pos[0].toFixed(1)}.`); return true;
       }
+      const xn = rig.pos[0] - side * 12;
+      if (xn < L[0] - 1e-6 || xn > L[1] + 1e-6) { stageMsg(`The pod's end is beyond X's reach: starting at X ${rig.pos[0].toFixed(1)}. Lay the pod a little further ${side > 0 ? 'left' : 'right'} next time.`); return false; }
+      stageMsg(`Looking for the pod's end: X ${xn.toFixed(0)}…`); await stageMoveTo({ x: xn }); await sleepMs(250);
     }
-    await stageMoveTo({ x: x0 });
-    stageMsg('No black start line found: starting where the stage is.'); return false;
+    return false;
   }
   // Scan: the remaining shots of this side, X stepped from the start, autofocus, then the normal Capture.
   $('stageScanBtn').onclick = e => stageRun(e.target, async () => {
@@ -2419,7 +2410,7 @@ document.documentElement.lang = 'en';
     const dx = parseFloat($('stageStepX').value), first = nextShot(podId), k0 = first ? parseInt(first.slice(1), 10) - 1 : 0;
     let starts = {}; try { starts = JSON.parse(localStorage.getItem('eggSideStart') || '{}'); } catch {}
     const sideKey = podId + '|' + (first || 'A')[0];
-    if (k0 === 0) await findStartMark();   // a new side: start at the black line drawn at the pod's right end, if there is one
+    if (k0 === 0) await findStartMark();   // a new side: start at the pod's own end
     const x0 = k0 === 0 ? +rig.pos[0].toFixed(2) : starts[sideKey] ?? parseFloat($('stageStartX').value);
     if (k0 === 0) { starts[sideKey] = x0; try { localStorage.setItem('eggSideStart', JSON.stringify(starts)); } catch {} }
     $('stageStartX').value = x0;
