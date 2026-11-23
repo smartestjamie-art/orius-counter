@@ -398,7 +398,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23zi'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23zj'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-3';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -1871,7 +1871,7 @@ document.documentElement.lang = 'en';
   // the move (jog, centring, scan). Z has no switch yet, so Z is not limited. Limits are kept in the browser.
   const AX = { X: 0, Y: 1, Z: 2 };
   const stageLim = { ...RIG.lim };   // Z: the band the pods' surface sits in (they all lie at one height), with room for focus stacks
-  try { const l = JSON.parse(localStorage.getItem('eggStageLim') || '{}'); if (l.zRef === 'switch') { Object.assign(stageLim, l); stageLim.y = Math.min(stageLim.y ?? RIG.lim.y, RIG.lim.y); stageLim.zlo = RIG.lim.zlo; stageLim.zhi = Math.max(stageLim.zhi, RIG.lim.zhi); } } catch {}   // never more Y than the rig allows   // older copies (Z without its switch) are ignored
+  try { const l = JSON.parse(localStorage.getItem('eggStageLim') || '{}'); if (l.zRef === 'switch') { Object.assign(stageLim, l); stageLim.y = Math.min(stageLim.y ?? RIG.lim.y, RIG.lim.y); stageLim.zlo = RIG.lim.zlo; stageLim.zhi = RIG.lim.zhi; } } catch {}   // never more Y than the rig allows   // older copies (Z without its switch) are ignored
   const limSave = () => { try { localStorage.setItem('eggStageLim', JSON.stringify(stageLim)); } catch {} $('stageMaxX').value = stageLim.x; $('stageMaxY').value = stageLim.y ?? ''; $('stageZLo').value = stageLim.zlo; $('stageZHi').value = stageLim.zhi; };
   // Z has no switch: its position is remembered in the browser between sessions (the motors hold while powered and the
   // lead screw does not slip), so the Z band applies whether or not X and Y are homed.
@@ -2536,6 +2536,16 @@ document.documentElement.lang = 'en';
     // height or angle may have changed since: moved rig, straightened column), then kept
     // bring the pod into the middle first (with the calibration kept from before), so the calibration below measures
     // the pod and not the board's repeating squares (they gave Y 2 px/mm with only the pod's tip in a corner, 23 Nov)
+    // This side already has shots (an earlier try): ask whether to start the side again from where the stage is now
+    // (its old shots removed) or carry on with them (23 Nov: it carried on at A3 from the old start and looked random).
+    {
+      const n0 = nextShot(podId), sd = (n0 || 'B')[0], old = photos.filter(p => !p.example && p.pod === podId && (p.shot || '')[0] === sd);
+      if (old.length && n0 && parseInt(n0.slice(1), 10) > 1) {
+        if (confirm(`${podId} side ${sd} already has ${old.length} shot${old.length > 1 ? 's' : ''}.\n\nOK: start side ${sd} again from where the stage is now (those shots are removed).\nCancel: carry on after them, from where that try started.`)) {
+          old.forEach(removePhoto); render();
+        }
+      }
+    }
     const fixed = spot(), first0 = nextShot(podId), newSide = !first0 || parseInt(first0.slice(1), 10) === 1;
     // A new side starts exactly where the stage is now (Home parks at the start spot, the user fine-tunes X, Y and focus
     // from there, then presses Scan): this X, this Y kept for the whole side, this Z as the side's focus. A side already
