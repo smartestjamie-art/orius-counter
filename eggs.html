@@ -133,7 +133,7 @@
   .photos-panel table { min-width: 520px; }
   .stitch { margin: 8px 0 16px; }
   #eggCheck { position: fixed; inset: 0; z-index: 1000; background: rgba(10,12,11,.96); color: #eee; display: flex; flex-direction: column; align-items: center; padding: 12px 16px; overflow: auto; }
-  #eggCheck .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 200px)); gap: 8px; margin: 10px 0; }
+  #eggCheck .grid { display: grid; grid-template-columns: repeat(4, min(200px, calc((100vh - 190px) / 4), calc((100vw - 56px) / 4))); gap: 8px; margin: 10px 0; }
   #eggCheck .tile { position: relative; border: 4px solid #333; border-radius: 6px; cursor: pointer; aspect-ratio: 1; overflow: hidden; }
   #eggCheck .tile.yes { border-color: #2ecc71; }
   #eggCheck .tile canvas { width: 100%; height: 100%; display: block; }
@@ -394,7 +394,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23ze'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23zf'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-3';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
