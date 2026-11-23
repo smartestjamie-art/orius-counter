@@ -385,7 +385,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23q'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23r'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-2';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -1807,7 +1807,13 @@ document.documentElement.lang = 'en';
       stageMsg(`Connected: ${line}.`); for (const w of rig.waiters.splice(0)) w.fail(new Error('reset'));
       // The Arduino restarts whenever the page connects, so it never knows where the stage is: find the switches at
       // once (Z goes up first, clear of the pod). Not after a reset the page made itself (Stop, backing off a switch).
-      if (!rig.bouncing && !rig.stopping && !rig.homing) setTimeout(() => { if (!rig.busy) $('stageHomeBtn').click(); }, 800);
+      // Home by itself only when the stage's last place is known (each axis then goes only a few mm past where its
+      // switch should be). Otherwise a person checks the switches first: a dead switch let Y run into the column.
+      let known = false; try { known = !!localStorage.getItem('eggLastPos'); } catch {}
+      if (!rig.bouncing && !rig.stopping && !rig.homing) {
+        if (known) setTimeout(() => { if (!rig.busy) $('stageHomeBtn').click(); }, 800);
+        else setTimeout(() => stageMsg('Connected. Where the stage is is not known, so it does not home by itself: press each limit switch by hand and check the status line shows "switch X", "switch Y", "switch Z", then press Home (under Adjust by hand).'), 900);
+      }
     }
     stageLog(line);
   }
