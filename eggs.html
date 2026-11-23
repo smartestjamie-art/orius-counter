@@ -385,7 +385,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23za'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23zb'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-3';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -1945,7 +1945,7 @@ document.documentElement.lang = 'en';
     // When the stage's last place is known (kept while homed, nothing moved since), each axis may go only as far as its
     // switch should be plus 4 mm: a switch that does not answer then stops the slide short of the column (23 Nov, Y).
     let last = null; try { last = JSON.parse(localStorage.getItem('eggLastPos') || 'null'); } catch {}
-    const reach = (i, travel, need) => last ? Math.max(6, Math.min(travel, need + 4)) : travel;
+    const reach = (i, travel, need) => last ? Math.max(8, Math.min(travel, need + 8)) : travel;   // + 8 mm: a sudden stop or lost steps leave the kept place a few mm off
     stageMsg('Homing Z: up to its switch…'); await seekSwitch('Z', reach(2, 30, last ? 2 - last[2] + 3 : 0), 1);
     stageMsg('Homing Y: forwards to its switch…'); await seekSwitch('Y', reach(1, 46, last ? last[1] + 2 : 0));
     stageMsg('Homing X: left to its switch…'); await seekSwitch('X', reach(0, 310, last ? last[0] + 2 : 0));
@@ -1966,7 +1966,7 @@ document.documentElement.lang = 'en';
   $('stageZLo').onchange = $('stageZHi').onchange = () => { const a = parseFloat($('stageZLo').value), b = parseFloat($('stageZHi').value); if (a < b) { stageLim.zlo = a; stageLim.zhi = b; } limSave(); };
   $('stageMaxYBtn').onclick = () => { if (!rig.homed) { stageMsg('Press Home first.'); return; } stageLim.y = +rig.pos[1].toFixed(1); limSave(); stageMsg(`Y limit set to ${stageLim.y} mm.`); };
   $('stageUnlockBtn').onclick = () => stageSend('$X').then(() => stageMsg('Unlocked (not homed: positions start from here).')).catch(e => stageMsg(e.message));
-  $('stageStopBtn').onclick = async () => { rig.aborted = true; rig.scanStop = true; rig.stopping = true; await stageRaw('\x85'); await stageRaw('!'); await sleepMs(200); await stageRaw('\x18'); await sleepMs(1500); rig.stopping = false; rig.homed = false; stageMsg('Stopped. Press Home before scanning again.'); rig.busy = false; };
+  $('stageStopBtn').onclick = async () => { if (rig.homed) { try { localStorage.setItem('eggLastPos', JSON.stringify(rig.pos)); } catch {} } rig.aborted = true; rig.scanStop = true; rig.stopping = true; await stageRaw('\x85'); await stageRaw('!'); await sleepMs(200); await stageRaw('\x18'); await sleepMs(1500); rig.stopping = false; rig.homed = false; stageMsg('Stopped. Press Home before scanning again.'); rig.busy = false; };
   // Jog (as in MicroScanner's jog buttons): a click moves one step; holding for 600 ms starts a continuous jog that
   // stops the moment the button is released (GRBL jog-cancel, 0x85). Arrow keys jog X/Y, Page Up/Down jog Z.
   // Every jog is cut short at the axis limit (after Home). rig.goal follows jogs still on their way.
