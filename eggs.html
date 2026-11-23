@@ -385,7 +385,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23f'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23g'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-1';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -1846,7 +1846,7 @@ document.documentElement.lang = 'en';
       if (rig.pins.includes(ax)) hit = true; else if (t > 8 && rig.state === 'Idle') break; else if (/Alarm/.test(rig.state)) throw new Error('Stage ' + rig.state);
     }
     await stageRaw('\x85'); await stageIdle();
-    if (!hit) throw new Error(`${ax} did not reach its switch: is the 12 V on and the switch in place?`);
+    if (!hit) throw new Error(`${ax} went its whole travel without its switch answering: stopped. Check the ${ax} switch is in place (its lever reaches the slide) and its cable is plugged in, then press Home.`);
     for (let k = 0; k < 8 && await pressed(); k++) await off(1);
     if (await pressed()) throw new Error(`The ${ax} switch did not release.`);
     await off(2);
@@ -1862,9 +1862,11 @@ document.documentElement.lang = 'en';
     const oldZero = rig.zero[2];
     rig.homed = false; rig.homing = true; await stageSend('$21=0');
     // Z first, upwards: it lifts the microscope clear of the pod before anything moves under it.
-    stageMsg('Homing Z: up to its switch…'); await seekSwitch('Z', 100, 1);
-    stageMsg('Homing Y: forwards to its switch…'); await seekSwitch('Y', 100);
-    stageMsg('Homing X: left to its switch…'); await seekSwitch('X', 420);
+    // each search goes no further than the axis's whole travel (+ a little): a switch that does not answer (unplugged,
+    // knocked out of place) must not let the slide run on into its end and push the switch away (23 Nov, Z)
+    stageMsg('Homing Z: up to its switch…'); await seekSwitch('Z', 27, 1);
+    stageMsg('Homing Y: forwards to its switch…'); await seekSwitch('Y', 46);
+    stageMsg('Homing X: left to its switch…'); await seekSwitch('X', 310);
     await stageRaw('?'); await sleepMs(250);
     rig.zero = rig.mpos.slice(); rig.pos = [0, 0, 0]; rig.homed = true;   // Z 0 is 2 mm below its switch; the microscope works below it (negative Z)
     // The Z band (where the pods are in focus) was kept relative to the remembered Z; the first time Z is homed it is
