@@ -1,0 +1,884 @@
+{
+ "about": "Egg / not-egg answers given by the user on 23 Nov 2026, for spots found on microscope photos of pod 'egg' (positions in each shot's photo, px). Pods 8-17 (21-22 Nov) had no eggs at all: every spot found on them is a 'not egg' too.",
+ "noEggPods": [
+  "Pod 8",
+  "Pod 9",
+  "Pod 10",
+  "Pod 11",
+  "Pod 13",
+  "Pod 14",
+  "Pod 15",
+  "Pod 16",
+  "Pod 17"
+ ],
+ "labels": [
+  {
+   "pod": "egg",
+   "shot": "A11",
+   "x": 1796,
+   "y": 1045,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B2",
+   "x": 903,
+   "y": 349,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A2",
+   "x": 2228,
+   "y": 1359,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A4",
+   "x": 929,
+   "y": 1637,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B1",
+   "x": 974,
+   "y": 1678,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A10",
+   "x": 701,
+   "y": 673,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A7",
+   "x": 394,
+   "y": 955,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A6",
+   "x": 724,
+   "y": 1439,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A7",
+   "x": 841,
+   "y": 1148,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A7",
+   "x": 1827,
+   "y": 770,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B8",
+   "x": 1717,
+   "y": 1579,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B5",
+   "x": 1166,
+   "y": 1266,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A6",
+   "x": 1522,
+   "y": 392,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A3",
+   "x": 712,
+   "y": 401,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B10",
+   "x": 882,
+   "y": 837,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B7",
+   "x": 956,
+   "y": 18,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A11",
+   "x": 2102,
+   "y": 862,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A7",
+   "x": 1063,
+   "y": 1549,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A4",
+   "x": 1190,
+   "y": 996,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A7",
+   "x": 1140,
+   "y": 1720,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B2",
+   "x": 1745,
+   "y": 523,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B4",
+   "x": 1977,
+   "y": 552,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B1",
+   "x": 1236,
+   "y": 1360,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B1",
+   "x": 1933,
+   "y": 318,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A1",
+   "x": 2157,
+   "y": 499,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B8",
+   "x": 1950,
+   "y": 675,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A4",
+   "x": 1045,
+   "y": 224,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B1",
+   "x": 820,
+   "y": 340,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B9",
+   "x": 746,
+   "y": 153,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A3",
+   "x": 640,
+   "y": 283,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B1",
+   "x": 1676,
+   "y": 928,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A8",
+   "x": 1345,
+   "y": 1774,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B4",
+   "x": 1221,
+   "y": 1180,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A7",
+   "x": 1515,
+   "y": 1584,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B4",
+   "x": 765,
+   "y": 1390,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B9",
+   "x": 1302,
+   "y": 1514,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B5",
+   "x": 1074,
+   "y": 352,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B5",
+   "x": 866,
+   "y": 1612,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A8",
+   "x": 1255,
+   "y": 1598,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A3",
+   "x": 1736,
+   "y": 150,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B8",
+   "x": 1143,
+   "y": 1725,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A10",
+   "x": 2054,
+   "y": 1205,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B3",
+   "x": 1436,
+   "y": 1253,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B8",
+   "x": 1940,
+   "y": 1696,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A7",
+   "x": 439,
+   "y": 896,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A7",
+   "x": 344,
+   "y": 939,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B6",
+   "x": 1529,
+   "y": 1607,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B4",
+   "x": 1531,
+   "y": 555,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B6",
+   "x": 1794,
+   "y": 1489,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B6",
+   "x": 2091,
+   "y": 182,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B6",
+   "x": 1175,
+   "y": 1661,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A5",
+   "x": 611,
+   "y": 1512,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A10",
+   "x": 1852,
+   "y": 388,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B3",
+   "x": 1046,
+   "y": 1257,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A9",
+   "x": 994,
+   "y": 1649,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A6",
+   "x": 1521,
+   "y": 1698,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B6",
+   "x": 1529,
+   "y": 905,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A2",
+   "x": 1080,
+   "y": 232,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B3",
+   "x": 1137,
+   "y": 1504,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A10",
+   "x": 2009,
+   "y": 373,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B6",
+   "x": 1436,
+   "y": 495,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B1",
+   "x": 2220,
+   "y": 435,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A4",
+   "x": 1087,
+   "y": 462,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B10",
+   "x": 1722,
+   "y": 945,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B1",
+   "x": 1094,
+   "y": 1665,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A9",
+   "x": 1701,
+   "y": 1479,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A8",
+   "x": 2121,
+   "y": 1273,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B2",
+   "x": 1572,
+   "y": 800,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B3",
+   "x": 1562,
+   "y": 1640,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A2",
+   "x": 1843,
+   "y": 535,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A9",
+   "x": 1388,
+   "y": 405,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A7",
+   "x": 1456,
+   "y": 1309,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A4",
+   "x": 1866,
+   "y": 1069,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A5",
+   "x": 1221,
+   "y": 1532,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A7",
+   "x": 1885,
+   "y": 805,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A10",
+   "x": 1898,
+   "y": 1623,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A8",
+   "x": 2105,
+   "y": 362,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B1",
+   "x": 851,
+   "y": 1711,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B6",
+   "x": 823,
+   "y": 1448,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A5",
+   "x": 944,
+   "y": 965,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B6",
+   "x": 1928,
+   "y": 661,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B7",
+   "x": 1348,
+   "y": 1652,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B4",
+   "x": 1439,
+   "y": 713,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A7",
+   "x": 1754,
+   "y": 743,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A7",
+   "x": 452,
+   "y": 1121,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B9",
+   "x": 862,
+   "y": 1713,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A8",
+   "x": 2186,
+   "y": 1646,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A8",
+   "x": 1563,
+   "y": 1618,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A9",
+   "x": 2106,
+   "y": 1228,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A11",
+   "x": 2037,
+   "y": 825,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A2",
+   "x": 714,
+   "y": 378,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A10",
+   "x": 1682,
+   "y": 1136,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B6",
+   "x": 1720,
+   "y": 1371,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A4",
+   "x": 1497,
+   "y": 1674,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A7",
+   "x": 1615,
+   "y": 1273,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A8",
+   "x": 1245,
+   "y": 600,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A9",
+   "x": 1870,
+   "y": 378,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B5",
+   "x": 1846,
+   "y": 283,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A9",
+   "x": 2054,
+   "y": 1055,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A8",
+   "x": 2210,
+   "y": 1538,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A7",
+   "x": 344,
+   "y": 1332,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B2",
+   "x": 1946,
+   "y": 227,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B8",
+   "x": 476,
+   "y": 1197,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A2",
+   "x": 1030,
+   "y": 1686,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A7",
+   "x": 1199,
+   "y": 930,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A8",
+   "x": 1202,
+   "y": 503,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B5",
+   "x": 1460,
+   "y": 1713,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B6",
+   "x": 522,
+   "y": 655,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A7",
+   "x": 821,
+   "y": 1253,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B6",
+   "x": 1507,
+   "y": 1391,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A9",
+   "x": 568,
+   "y": 840,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A7",
+   "x": 872,
+   "y": 911,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "B6",
+   "x": 1794,
+   "y": 1489,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A11",
+   "x": 1763,
+   "y": 1092,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B2",
+   "x": 1311,
+   "y": 1472,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A3",
+   "x": 1854,
+   "y": 591,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A8",
+   "x": 1119,
+   "y": 1475,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B6",
+   "x": 1541,
+   "y": 1632,
+   "egg": false
+  },
+  {
+   "pod": "egg",
+   "shot": "A9",
+   "x": 921,
+   "y": 1631,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "B5",
+   "x": 1090,
+   "y": 526,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A8",
+   "x": 1921,
+   "y": 1110,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A9",
+   "x": 1622,
+   "y": 656,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A9",
+   "x": 1301,
+   "y": 1072,
+   "egg": true
+  },
+  {
+   "pod": "egg",
+   "shot": "A8",
+   "x": 1206,
+   "y": 967,
+   "egg": true
+  }
+ ]
+}
