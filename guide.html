@@ -32,24 +32,27 @@
 
   <h2>1. Start of the day</h2>
   <ol>
-    <li>Plug the rig's USB cable and the microscope's USB cable into the computer. Switch on the 12 V power.</li>
+    <li>Plug the rig's USB cable and the microscope's USB cable into the computer. Switch on the power supply (24 V) last.</li>
     <li>Open the page in Chrome or Edge.</li>
     <li>Press <b class="btn">Use camera</b> (top right). The live microscope picture appears.</li>
     <li>Press <b class="btn">Connect stage</b>. The first time on a computer, pick the Arduino from the list.</li>
-    <li>Wait about 40 s: the rig finds its three limit switches by itself (Z up, then Y, then X) and parks. The status line then ends in <b>homed</b>.</li>
+    <li>Wait about 40 s: the rig finds its three limit switches by itself (Z up, then Y, then X) and parks at the <b>start spot</b> (X 1, Y 16, Z −29). The status line then ends in <b>homed</b>.</li>
     <li>If instead it says <i>where the stage is is not known</i>: press each of the three limit switches by hand. Each press should light the switch's small LED and show <b>switch X</b>, <b>switch Y</b> or <b>switch Z</b> on the status line. Only then press <b>Home</b> (under <i>Adjust by hand</i>). If a switch shows nothing, fix its plug first: homing without it can drive that slide into its end.</li>
   </ol>
 
   <h2>2. Scanning one pod</h2>
   <ol>
     <li>Type the pod's name in <b>Pod ID</b> (for example <i>Pod 12</i>).</li>
-    <li>Lay the pod along the rails, roughly under the lens and not too far forward. Then move the stage (arrow keys, or the X / Y buttons under <i>Adjust by hand</i>) until the pod's <b>right end is in the middle of the live picture</b>. The scan starts from wherever the stage is.</li>
-    <li>Press <b class="btn">Scan this side</b>. The rig moves along the pod, takes a focus-stacked picture every 24 mm, and stops at the pod's tail. The stitched pod grows underneath the live picture as it goes.</li>
-    <li>When it says <i>Flip the pod</i>: turn the pod over, move the stage so its right end is in the middle of the picture again, press <b class="btn">Side B next</b>, then <b class="btn">Scan this side</b>.</li>
+    <li>Lay the pod along the rails, its right end under the lens (the stage is parked at the start spot).</li>
+    <li><b>Fine-tune</b> with the keyboard: arrow keys move X and Y, Page Up / Page Down move Z (the jog step is set under <i>Adjust by hand</i>). Stop when the pod's <b>right end is in the picture</b>, the pod runs <b>across the middle</b>, and its surface is <b>sharp</b>.</li>
+    <li>Press <b class="btn">Scan this side</b>. It starts exactly where you left the stage: X steps about 26 mm per shot, Y follows the pod (at most 8 mm from where you set it), Z sweeps from 8 mm below to 10 mm above the focus you set, and it stops by itself at the pod's tail. The stitched pod grows underneath the live picture.</li>
+    <li>If a box asks whether to start this side again: <b>OK</b> starts it again from where the stage is (the side's old shots are removed); <b>Cancel</b> carries on after them.</li>
+    <li>When it says <i>Flip the pod</i>: turn the pod over, fine-tune again (right end in the picture, across the middle, sharp), press <b class="btn">Side B next</b>, then <b class="btn">Scan this side</b>.</li>
     <li>If it says the pod lies <i>too far forward</i> (or back), move the pod the way it says and scan that side again.</li>
     <li>Press <b class="btn">Next pod</b>. This <b>saves the pod first</b> (one .zip in your Downloads folder), then moves on to the next pod's name.</li>
   </ol>
-  <p>The first scan after opening the page starts with a short calibration (the stage moves 8 mm in X and Y and back). That is normal.</p>
+  <p>To change where Home parks (for example after the microscope was moved), fine-tune to the new place and press <b>Remember this spot</b> under <i>Adjust by hand</i>.</p>
+  <p><b>Egg numbers:</b> the page counts round white spots and some are not eggs; the true number is about <b>0.75 × the page's number</b>. <b>Check eggs on this pod</b> (under the stitched picture) gives a corrected number in about a minute.</p>
 
   <h2>3. Saving</h2>
   <ul>
@@ -65,7 +68,8 @@
     <tr><td>“A limit signal flickered…”</td><td>Nothing to do: it finds its switches again and carries on with the scan by itself.</td></tr>
     <tr><td>“A limit switch was hit: backing off…”</td><td>It moves off the switch by itself. Check nothing is in the way, then press <b>Home</b> and scan again. The scan carries on from the missing shots.</td></tr>
     <tr><td>The live picture is black or frozen</td><td>Press <b class="btn">Use camera</b> again. If the wrong camera shows, choose <i>Digital Microscope</i> under <i>Adjust by hand</i>.</td></tr>
-    <tr><td>“Not connected” / Connect does nothing</td><td>Check the USB cable and the 12 V power, reload the page, press <b class="btn">Connect stage</b> again. Close any other tab that has the page open.</td></tr>
+    <tr><td>“Not connected” / Connect does nothing / “The device has been lost”</td><td>Check the USB cable at both ends and the power supply, reload the page, press <b class="btn">Connect stage</b> again. Close any other tab that has the page open (only one page can hold the rig). If the USB keeps dropping when the motors start, use a short USB cable or a powered USB hub.</td></tr>
+    <tr><td>“… went its whole travel without its switch answering”</td><td>Stop. Do not press Home again until that switch is checked: press it by hand and see <b>switch X/Y/Z</b> on the status line.</td></tr>
     <tr><td>The scan stopped early, before the tail</td><td>Press <b class="btn">Scan this side</b> again: it continues from the next shot.</td></tr>
     <tr><td>The pictures are blurred everywhere</td><td>The microscope's height may have changed (rig moved or knocked). Tell Jamie: the focus band needs measuring again.</td></tr>
   </table>
