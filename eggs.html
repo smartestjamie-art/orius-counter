@@ -385,7 +385,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23e'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23f'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-1';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -671,7 +671,7 @@ document.documentElement.lang = 'en';
   // median of measured / predicted; one odd seam cannot pull it. (2) each seam then matched only +-24 px around that,
   // and to 2 px at half size. Matching: normalised correlation of the pod's fine detail (brightness minus its 9 px
   // surroundings), pod pixels only (the board's regular squares match themselves one square off).
-  const refined = new Map(), scales = new Map();
+  const refined = new Map(), scales = new Map(), pairRatio = new Map();
   function edgeMap(ph, k = 4) {
     const key = 'hp' + k; if (ph[key]) return ph[key];
     const w = Math.round(ph.origW / k), h = Math.round(ph.origH / k), c = document.createElement('canvas'); c.width = w; c.height = h;
@@ -706,8 +706,10 @@ document.documentElement.lang = 'en';
     for (let i = 0; i + 1 < shots.length; i++) {
       const x = shots[i], y = shots[i + 1]; if (Math.abs(+posOf(y) - +posOf(x)) !== 1 || x.origW !== y.origW) continue;
       const p = predShift(x, y); if (Math.abs(p.s) < 0.2 * x.origW) continue;
-      const m = bestNcc(edgeMap(x), edgeMap(y), Math.round(p.s / 4), Math.round(p.dy / 4), 40, 2, 400);
-      if (m.r > 0.05) ratios.push(m.s * 4 / p.s);
+      const pk = x.key + '|' + y.key + '|' + Math.round(p.s);   // each seam measured once
+      let ratio = pairRatio.get(pk);
+      if (ratio === undefined) { const m = bestNcc(edgeMap(x), edgeMap(y), Math.round(p.s / 4), Math.round(p.dy / 4), 40, 2, 400); ratio = m.r > 0.05 ? m.s * 4 / p.s : null; pairRatio.set(pk, ratio); }
+      if (ratio != null) ratios.push(ratio);
     }
     ratios.sort((u, v) => u - v);
     const k = ratios.length >= 2 ? Math.min(1.15, Math.max(0.87, ratios[ratios.length >> 1])) : 1;
