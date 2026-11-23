@@ -398,7 +398,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23zh'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23zi'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-3';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -2025,7 +2025,7 @@ document.documentElement.lang = 'en';
   // The fixed spot (set once by hand, 23 Nov): where Home parks and every side's scan starts, with Y kept there (no
   // centring) and Z's sweep centred on its focus height. Without it: the old park place, centring and end-finding.
   const spot = () => { try { const v = JSON.parse(localStorage.getItem('eggSpot') || 'null'); if (v && v.length === 3 && v.every(Number.isFinite)) return v; } catch {} return [RIG.park.x, RIG.park.y, RIG.park.z]; };   // set by the button, else the one in RIG
-  const focusZ = () => (spot() || [0, 0, RIG.park.z])[2];
+  const focusZ = () => rig.scanFocus ?? spot()[2];   // this side's focus (set when it started), else the start spot's
   const spotNote = () => { const v = spot(); $('stageSpotNote').textContent = v ? `Start spot: X ${v[0].toFixed(1)}, Y ${v[1].toFixed(1)}, Z ${v[2].toFixed(2)} (Home parks here; every scan starts here).` : 'No start spot set: jog to the pod\'s right end, centred and in focus, then press Remember this spot.'; };
   $('stageSpotBtn').onclick = () => {
     if (!rig.homed) { stageMsg('Press Home first, so the spot is measured from the switches.'); return; }
@@ -2537,8 +2537,14 @@ document.documentElement.lang = 'en';
     // bring the pod into the middle first (with the calibration kept from before), so the calibration below measures
     // the pod and not the board's repeating squares (they gave Y 2 px/mm with only the pod's tip in a corner, 23 Nov)
     const fixed = spot(), first0 = nextShot(podId), newSide = !first0 || parseInt(first0.slice(1), 10) === 1;
-    if (fixed && newSide) { stageMsg('Going to the start spot…'); await stageMoveTo({ x: fixed[0], y: fixed[1] }); await stageMoveTo({ z: fixed[2] }); await sleepMs(300); await nextFrame(); }
-    else if (stageCal && stageCal.du != null) { try { await stageCentrePod(); } catch {} }
+    // A new side starts exactly where the stage is now (Home parks at the start spot, the user fine-tunes X, Y and focus
+    // from there, then presses Scan): this X, this Y kept for the whole side, this Z as the side's focus. A side already
+    // begun goes on with its own remembered start and focus.
+    let focus = {}; try { focus = JSON.parse(localStorage.getItem('eggSideFocus') || '{}'); } catch {}
+    const sideKey0 = podId + '|' + (first0 || 'A')[0];
+    if (newSide) { focus[sideKey0] = { z: +rig.pos[2].toFixed(3), y: +rig.pos[1].toFixed(2) }; try { localStorage.setItem('eggSideFocus', JSON.stringify(focus)); } catch {} }
+    rig.scanFocus = focus[sideKey0] ? focus[sideKey0].z : null;
+    if (!newSide && focus[sideKey0]) await stageMoveTo({ y: focus[sideKey0].y });
     { // a pod must be in view at the start (else the calibration has only the plain board to measure)
       const v = $('video'), w = 160, h = Math.round(160 * v.videoHeight / v.videoWidth), c = document.createElement('canvas'); c.width = w; c.height = h;
       const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(v, 0, 0, w, h); const d = x.getImageData(0, 0, w, h).data; let g = 0;
@@ -2554,7 +2560,6 @@ document.documentElement.lang = 'en';
     const dx = parseFloat($('stageStepX').value), first = nextShot(podId), k0 = first ? parseInt(first.slice(1), 10) - 1 : 0;
     let starts = {}; try { starts = JSON.parse(localStorage.getItem('eggSideStart') || '{}'); } catch {}
     const sideKey = podId + '|' + (first || 'A')[0];
-    if (k0 === 0 && !fixed) await findStartMark();   // a new side without a start spot: start at the pod's own end
     const x0 = k0 === 0 ? +rig.pos[0].toFixed(2) : starts[sideKey] ?? parseFloat($('stageStartX').value);
     if (k0 === 0) { starts[sideKey] = x0; try { localStorage.setItem('eggSideStart', JSON.stringify(starts)); } catch {} }
     $('stageStartX').value = x0;
