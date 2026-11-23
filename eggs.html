@@ -385,9 +385,9 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23j'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23k'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
-  const WHITE_COUNTER = 'white-1';   // microscope stage photos (scale tag _S in the name): white round eggs, below
+  const WHITE_COUNTER = 'white-2';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
   const counterFor = ph => isStagePhoto(ph) ? WHITE_COUNTER : EGG_COUNTER;
   const worker = new Worker('eggs_worker.js?v=' + BUILD);
@@ -476,6 +476,31 @@ document.documentElement.lang = 'en';
   // channel (blue on green tissue, low on brown spots) is 25 above its surroundings (41 px box); a ball is a compact
   // patch 8-26 px across that is at least 50 above somewhere, lying on the pod (green all round it, so the white board
   // does not count). Only what is in the photo: no eggs in view, none counted.
+  // Egg or not, for a white blob: a small logistic model trained on 124 spots of pod "egg" that the user marked egg /
+  // not egg (23 Nov). Eggs are whiter and less green in the middle than around them, stand out from the texture
+  // around, and are full and round. Tested leaving each spot out: 79 % right; of what it counts, 84 % are eggs.
+  const EGG_MODEL = { b: -0.2916,
+    mu: [49.8069, 49.8052, 0.577, 0.6409, 0.4291, 0.2903, 3.9095, 8.8548, 1.284, 71.8226],
+    sg: [13.891, 13.8916, 0.0709, 0.1097, 0.0665, 0.1285, 1.8035, 2.5681, 0.264, 17.1088],
+    w: [0.1718, 0.1799, 1.7416, 0.8417, 1.4017, 0.0681, 0.9514, 0.4101, -0.4115, -0.1907] };   // contr dB bR fill sat rim snr dm asp pk
+  function eggScore(d, W, cx, cy, dm, asp, fill, pk) {
+    const r = Math.max(3, dm / 2); let iM = 0, iN = 0, iS = 0, iB = 0, iG = 0, aM = 0, aM2 = 0, aN = 0, aB = 0;
+    for (let y = -24; y <= 24; y++) for (let x = -24; x <= 24; x++) {
+      const q = Math.hypot(x, y); if (q > r + 12) continue;
+      const j = ((cy + y) * W + cx + x) * 4, R = d[j], G = d[j + 1], B = d[j + 2], mn = Math.min(R, G, B), mx = Math.max(R, G, B);
+      if (q <= r * 0.7) { iM += mn; iS += mx ? (mx - mn) / mx : 0; iB += B; iG += G; iN++; }
+      else if (q >= r + 3) { aM += mn; aM2 += mn * mn; aB += B; aN++; }
+    }
+    if (!iN || !aN) return 0;
+    iM /= iN; iS /= iN; iB /= iN; iG /= iN; aM /= aN; aB /= aN; const aS = Math.sqrt(Math.max(0, aM2 / aN - aM * aM));
+    let am = 0; const ang = [];
+    for (let t = 0; t < 16; t++) { const x = Math.round(cx + (r + 1.5) * Math.cos(t * Math.PI / 8)), y = Math.round(cy + (r + 1.5) * Math.sin(t * Math.PI / 8)), j = (y * W + x) * 4;
+      const v = Math.min(d[j], d[j + 1], d[j + 2]); ang.push(v); am += v / 16; }
+    const asd = Math.sqrt(ang.reduce((a, v) => a + (v - am) ** 2, 0) / 16), contr = iM - aM;
+    const f = [contr, iB - aB, iB / (iG + 1), fill, iS, asd / (contr + 1), contr / (aS + 1), dm, asp, pk], M = EGG_MODEL;
+    let z = M.b; for (let i = 0; i < f.length; i++) z += M.w[i] * (f[i] - M.mu[i]) / M.sg[i];
+    return 1 / (1 + Math.exp(-z));
+  }
   function whiteEggs(bmp) {
     const W = bmp.width, H = bmp.height, cx = new OffscreenCanvas(W, H).getContext('2d', { willReadFrequently: true }); cx.drawImage(bmp, 0, 0);
     const d = cx.getImageData(0, 0, W, H).data, n = W * H, m = new Float32Array(n);
@@ -494,12 +519,15 @@ document.documentElement.lang = 'en';
         if (x < minx) minx = x; if (x > maxx) maxx = x; if (y < miny) miny = y; if (y > maxy) maxy = y;
         if (a > 2000) continue;
         for (const r of [q - 1, q + 1, q - W, q + W]) if (r >= 0 && r < n && !seen[r] && D[r] > 25 && Math.abs((r % W) - x) <= 1) { seen[r] = 1; st.push(r); } }
-      const w = maxx - minx + 1, h = maxy - miny + 1, dm = Math.sqrt(4 * a / Math.PI);
-      if (dm < 8 || dm > 26 || pk < 50 || Math.max(w, h) / Math.min(w, h) >= 2 || a / (w * h) <= 0.5) continue;
+      const w = maxx - minx + 1, h = maxy - miny + 1, dm = Math.sqrt(4 * a / Math.PI), asp = Math.max(w, h) / Math.min(w, h), fill = a / (w * h);
+      if (dm < 6 || dm > 30 || pk < 38 || asp >= 2.6 || fill <= 0.4) continue;
       const ex = (minx + maxx) / 2, ey = (miny + maxy) / 2, rr = Math.max(12, dm * 1.1); let g = 0, k = 0;
       for (let t = 0; t < 24; t++) { const sx = Math.round(ex + rr * Math.cos(t * Math.PI / 12)), sy = Math.round(ey + rr * Math.sin(t * Math.PI / 12));
         if (sx < 0 || sy < 0 || sx >= W || sy >= H) continue; k++; const j = (sy * W + sx) * 4; if (isPod(d[j], d[j + 1], d[j + 2])) g++; }
       if (k < 12 || g < 0.5 * k) continue;
+      const ix = Math.round(ex), iy = Math.round(ey);
+      if (ix < 26 || iy < 26 || ix >= W - 26 || iy >= H - 26) continue;
+      if (eggScore(d, W, ix, iy, dm, asp, fill, pk) < 0.4) continue;
       pts.push([ex, ey]); sizes.push(dm);
     }
     sizes.sort((a, b) => a - b);
