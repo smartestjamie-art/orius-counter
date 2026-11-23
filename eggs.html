@@ -548,7 +548,7 @@ document.documentElement.lang = 'en';
   // The others keep their thumbnail and are decoded again from the stored file when needed.
   function trimBitmaps() {
     const keep = new Set([podId, selected && selected.pod]);
-    for (const ph of photos) if (ph.bmp && !ph.example && !keep.has(ph.pod) && ph.status === 'done') { ph.bmp.close(); ph.bmp = null; ph.evicted = true; ph.edge2 = null; }
+    for (const ph of photos) if (ph.bmp && !ph.example && !keep.has(ph.pod) && ph.status === 'done') { ph.bmp.close(); ph.bmp = null; ph.evicted = true; ph.hp2 = null; }
   }
   async function ensureBmps(list) {
     for (const ph of list) if (!ph.bmp && ph.evicted) { ph.bmp = await createImageBitmap(ph.blob); ph.evicted = false; }
@@ -659,48 +659,68 @@ document.documentElement.lang = 'en';
   function stageShift(a, b) {
     const pa = stagePos(a), pb = stagePos(b);
     if (!pa || !pb || !stageCal || stageCal.xu == null || pa.s !== pb.s || Math.abs(pa.s - stageCal.pxPerMm) > 1.5) return null;
-    const dX = pb.x - pa.x, dY = pb.y - pa.y;   // the picture's content moved by (dX*xu + dY*du, dX*xv + dY*dv); b(x) = a(x + s)
-    const s = -(dX * stageCal.xu + dY * stageCal.du) * a.origW, dy = -(dX * stageCal.xv + dY * stageCal.dv) * a.origH;
-    return refineShift(a, b, s, dy) || { s, dy, src: 'stage' };
+    const p = predShift(a, b, pa, pb), k = podScale(a);
+    return refineShift(a, b, p.s * k, p.dy * k) || { s: p.s * k, dy: p.dy * k, src: 'stage' };
   }
-  // The stage's positions put two shots within about a millimetre (calibration error, a lost motor step). The last bit
-  // comes from the pictures: around the predicted shift, the shift where the two overlapping parts agree best (edges
-  // compared, at 1/4 size, up to 1.5 mm either way). Kept per pair once both pictures are loaded.
-  const refined = new Map();
+  function predShift(a, b, pa = stagePos(a), pb = stagePos(b)) {
+    const dX = pb.x - pa.x, dY = pb.y - pa.y;   // the picture's content moved by (dX*xu + dY*du, dX*xv + dY*dv); b(x) = a(x + s)
+    return { s: -(dX * stageCal.xu + dY * stageCal.du) * a.origW, dy: -(dX * stageCal.xv + dY * stageCal.dv) * a.origH };
+  }
+  // Seams. The stage's positions and the calibration put two shots close, but the calibration (measured on the whole
+  // picture, mostly the blurred board below the pod) reads the pod's scale a few % low, which is ~100 px per step.
+  // So: (1) the true scale for this pod side, from all its seams at once: each seam matched widely (+-160 px), the
+  // median of measured / predicted; one odd seam cannot pull it. (2) each seam then matched only +-24 px around that,
+  // and to 2 px at half size. Matching: normalised correlation of the pod's fine detail (brightness minus its 9 px
+  // surroundings), pod pixels only (the board's regular squares match themselves one square off).
+  const refined = new Map(), scales = new Map();
   function edgeMap(ph, k = 4) {
-    const key = 'edge' + k; if (ph[key]) return ph[key];
+    const key = 'hp' + k; if (ph[key]) return ph[key];
     const w = Math.round(ph.origW / k), h = Math.round(ph.origH / k), c = document.createElement('canvas'); c.width = w; c.height = h;
     const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(ph.bmp, 0, 0, w, h);
     const d = ctx.getImageData(0, 0, w, h).data, g = new Float32Array(w * h), e = new Float32Array(w * h), m = new Uint8Array(w * h);
     for (let i = 0, j = 0; i < g.length; i++, j += 4) { g[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2]; m[i] = isPod(d[j], d[j + 1], d[j + 2]) ? 1 : 0; }
-    for (let y = 2; y < h - 2; y++) for (let x = 2; x < w - 2; x++) { const i = y * w + x; e[i] = Math.abs(g[i + 2] - g[i - 2]) + Math.abs(g[i + 2 * w] - g[i - 2 * w]); }
+    const W1 = w + 1, I = new Float64Array(W1 * (h + 1)), R = 4;
+    for (let y = 0; y < h; y++) { let r = 0; for (let x = 0; x < w; x++) { r += g[y * w + x]; I[(y + 1) * W1 + x + 1] = I[y * W1 + x + 1] + r; } }
+    for (let y = 0; y < h; y++) { const y0 = Math.max(0, y - R), y1 = Math.min(h, y + R + 1);
+      for (let x = 0; x < w; x++) { const x0 = Math.max(0, x - R), x1 = Math.min(w, x + R + 1);
+        e[y * w + x] = g[y * w + x] - (I[y1 * W1 + x1] - I[y0 * W1 + x1] - I[y1 * W1 + x0] + I[y0 * W1 + x0]) / ((x1 - x0) * (y1 - y0)); } }
     return ph[key] = { e, m, w, h };
+  }
+  function bestNcc(A, B, s0, d0, R, st, minN) {   // b(x) = a(x + s) at this scale; the best correlation within +-R
+    const { w, h } = A; let best = -2, bs = s0, bd = d0;
+    for (let sy = d0 - R; sy <= d0 + R; sy++) for (let sx = s0 - R; sx <= s0 + R; sx++) {
+      const x0 = Math.max(3, 3 - sx), x1 = Math.min(w - 3, w - 3 - sx), y0 = Math.max(3, 3 - sy), y1 = Math.min(h - 3, h - 3 - sy);
+      let sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0, n = 0;
+      for (let y = y0; y < y1; y += st) { const rb = y * w, ra = (y + sy) * w + sx;
+        for (let x = x0; x < x1; x += st) { if (!(A.m[ra + x] && B.m[rb + x])) continue; const u = A.e[ra + x], v = B.e[rb + x]; sa += u; sb += v; saa += u * u; sbb += v * v; sab += u * v; n++; } }
+      if (n < minN) continue;
+      const c = (sab - sa * sb / n) / Math.sqrt((saa - sa * sa / n) * (sbb - sb * sb / n) + 1e-9);
+      if (c > best) { best = c; bs = sx; bd = sy; }
+    }
+    return { s: bs, dy: bd, r: best };
+  }
+  function podScale(a) {
+    const side = (a.shot || '')[0], shots = sideShots(a.pod, side).filter(p => p.bmp && stagePos(p));
+    const sig = a.pod + side + '|' + shots.map(p => p.key).join(',') + '|' + stageCal.xu + stageCal.xv;
+    if (scales.has(sig)) return scales.get(sig);
+    const ratios = [];
+    for (let i = 0; i + 1 < shots.length; i++) {
+      const x = shots[i], y = shots[i + 1]; if (Math.abs(+posOf(y) - +posOf(x)) !== 1 || x.origW !== y.origW) continue;
+      const p = predShift(x, y); if (Math.abs(p.s) < 0.2 * x.origW) continue;
+      const m = bestNcc(edgeMap(x), edgeMap(y), Math.round(p.s / 4), Math.round(p.dy / 4), 40, 2, 400);
+      if (m.r > 0.05) ratios.push(m.s * 4 / p.s);
+    }
+    ratios.sort((u, v) => u - v);
+    const k = ratios.length >= 2 ? Math.min(1.15, Math.max(0.87, ratios[ratios.length >> 1])) : 1;
+    scales.set(sig, k); return k;
   }
   function refineShift(a, b, s, dy) {
     if (!a.bmp || !b.bmp || a.origW !== b.origW || a.origH !== b.origH) return null;
     const key = a.key + '|' + b.key + '|' + Math.round(s) + '|' + Math.round(dy), had = refined.get(key); if (had !== undefined) return had || null;
-    // pod pixels only: the board's regular squares match themselves one square off (about 100 px) and pulled seams
-    // there; and +-160 px, since the board-dominated calibration reads the pod's scale about 5 % low
-    const A = edgeMap(a), B = edgeMap(b), { w, h } = A, s0 = Math.round(s / 4), d0 = Math.round(dy / 4), R = 40;
-    let best = Infinity, bs = s0, bd = d0, found = false;
-    for (let sy = d0 - R; sy <= d0 + R; sy++) for (let sx = s0 - R; sx <= s0 + R; sx++) {
-      const x0 = Math.max(3, 3 - sx), x1 = Math.min(w - 3, w - 3 - sx), y0 = Math.max(3, 3 - sy), y1 = Math.min(h - 3, h - 3 - sy);
-      if (x1 - x0 < 30 || y1 - y0 < 60) continue;
-      let sum = 0, n = 0;
-      for (let y = y0; y < y1; y += 3) { const rb = y * w, ra = (y + sy) * w + sx; for (let x = x0; x < x1; x += 3) { if (!(A.m[ra + x] && B.m[rb + x])) continue; sum += Math.abs(A.e[ra + x] - B.e[rb + x]); n++; } }
-      if (n < 300) continue;   // too little pod in common to judge
-      const m = sum / n; if (m < best) { best = m; bs = sx; bd = sy; found = true; }
-    }
-    if (!found) { refined.set(key, false); return null; }
-    // then at half size, a few pixels around: seams to about 2 px (an egg is ~8 px)
-    const A2 = edgeMap(a, 2), B2 = edgeMap(b, 2), w2 = A2.w, h2 = A2.h; let b2 = Infinity, fs = bs * 2, fd = bd * 2;
-    for (let sy = bd * 2 - 4; sy <= bd * 2 + 4; sy++) for (let sx = bs * 2 - 4; sx <= bs * 2 + 4; sx++) {
-      const x0 = Math.max(3, 3 - sx), x1 = Math.min(w2 - 3, w2 - 3 - sx), y0 = Math.max(3, 3 - sy), y1 = Math.min(h2 - 3, h2 - 3 - sy);
-      let sum = 0, n = 0;
-      for (let y = y0; y < y1; y += 2) { const rb = y * w2, ra = (y + sy) * w2 + sx; for (let x = x0; x < x1; x += 2) { if (!(A2.m[ra + x] && B2.m[rb + x])) continue; sum += Math.abs(A2.e[ra + x] - B2.e[rb + x]); n++; } }
-      if (n >= 600 && sum / n < b2) { b2 = sum / n; fs = sx; fd = sy; }
-    }
-    const out = { s: fs * 2, dy: fd * 2, src: 'stage' };   // (stage + pictures: no hand sliders)
+    const m4 = bestNcc(edgeMap(a), edgeMap(b), Math.round(s / 4), Math.round(dy / 4), 6, 2, 400);
+    if (m4.r < 0.03) { refined.set(key, false); return null; }   // nothing to go by: the scaled stage positions stand
+    const m2 = bestNcc(edgeMap(a, 2), edgeMap(b, 2), m4.s * 2, m4.dy * 2, 3, 2, 1200);
+    const out = { s: m2.s * 2, dy: m2.dy * 2, src: 'stage' };   // (stage + pictures: no hand sliders)
     refined.set(key, out); return out;
   }
   // shift used for the a-b overlap: the stage's own positions; else the match when clear, else the remembered shift
