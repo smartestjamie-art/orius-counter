@@ -398,7 +398,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23zm'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23zn'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-3';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -2047,7 +2047,7 @@ document.documentElement.lang = 'en';
     // switch should be plus 4 mm: a switch that does not answer then stops the slide short of the column (23 Nov, Y).
     let last = null; try { last = JSON.parse(localStorage.getItem('eggLastPos') || 'null'); } catch {}
     const reach = (i, travel, need) => last ? Math.max(8, Math.min(travel, need + 8)) : travel;   // + 8 mm: a sudden stop or lost steps leave the kept place a few mm off
-    stageMsg('Homing Z: up to its switch…'); await seekSwitch('Z', reach(2, 30, last ? 2 - last[2] + 3 : 0), 1);
+    stageMsg('Homing Z: up to its switch…'); await seekSwitch('Z', reach(2, 45, last ? 2 - last[2] + 3 : 0), 1);   // the whole Z range (-37.5 up to the switch at +2) plus the 3 mm down
     stageMsg('Homing Y: forwards to its switch…'); await seekSwitch('Y', reach(1, 100, last ? last[1] + 2 : 0));   // towards the switch = away from the column: the whole slide (a slide pushed back to the column sits ~65 mm from its switch)
     stageMsg('Homing X: left to its switch…'); await seekSwitch('X', reach(0, 310, last ? last[0] + 2 : 0));
     await stageRaw('?'); await sleepMs(250);
