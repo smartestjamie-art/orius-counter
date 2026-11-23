@@ -715,12 +715,32 @@ document.documentElement.lang = 'en';
     const k = ratios.length >= 2 ? Math.min(1.15, Math.max(0.87, ratios[ratios.length >> 1])) : 1;
     scales.set(sig, k); return k;
   }
+  // Up/down from the pod's silhouette (its outline against the board is the same in both shots, sharp or not; the
+  // Y stage can fall short on a long move: 160 px at one seam on 23 Nov). Left/right it says little (the pod runs
+  // along X), so X stays with the scaled stage step, then both are fine-matched a few px on the pod's detail.
+  function silDy(A, B, sx, d0, R) {
+    const { w, h } = A; let best = -2, bd = d0;
+    for (let sy = d0 - R; sy <= d0 + R; sy++) {
+      const x0 = Math.max(1, 1 - sx), x1 = Math.min(w - 1, w - 1 - sx), y0 = Math.max(1, 1 - sy), y1 = Math.min(h - 1, h - 1 - sy);
+      if (x1 - x0 < 20 || y1 - y0 < 40) continue;
+      let sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0, n = 0;
+      for (let y = y0; y < y1; y += 2) { const rb = y * w, ra = (y + sy) * w + sx;
+        for (let x = x0; x < x1; x += 2) { const u = A.m[ra + x], v = B.m[rb + x]; sa += u; sb += v; saa += u * u; sbb += v * v; sab += u * v; n++; } }
+      const c = (sab - sa * sb / n) / Math.sqrt((saa - sa * sa / n) * (sbb - sb * sb / n) + 1e-9);
+      if (c > best) { best = c; bd = sy; }
+    }
+    return { dy: bd, r: best };
+  }
   function refineShift(a, b, s, dy) {
     if (!a.bmp || !b.bmp || a.origW !== b.origW || a.origH !== b.origH) return null;
     const key = a.key + '|' + b.key + '|' + Math.round(s) + '|' + Math.round(dy), had = refined.get(key); if (had !== undefined) return had || null;
-    const m4 = bestNcc(edgeMap(a), edgeMap(b), Math.round(s / 4), Math.round(dy / 4), 6, 2, 400);
-    if (m4.r < 0.03) { refined.set(key, false); return null; }   // nothing to go by: the scaled stage positions stand
-    const m2 = bestNcc(edgeMap(a, 2), edgeMap(b, 2), m4.s * 2, m4.dy * 2, 3, 2, 1200);
+    const A = edgeMap(a), B = edgeMap(b), s4 = Math.round(s / 4); let d4 = Math.round(dy / 4);
+    const sl = silDy(A, B, s4, d4, 50);   // +-200 px
+    if (sl.r >= 0.4) d4 = sl.dy;
+    const m4 = bestNcc(A, B, s4, d4, 6, 2, 400);
+    const ok = m4.r >= 0.05 && Math.abs(m4.dy - d4) <= 3;   // detail agrees with the outline: take it, else keep these
+    const c4 = ok ? m4 : { s: s4, dy: d4 };
+    const m2 = ok ? bestNcc(edgeMap(a, 2), edgeMap(b, 2), c4.s * 2, c4.dy * 2, 3, 2, 1200) : { s: c4.s * 2, dy: c4.dy * 2 };
     const out = { s: m2.s * 2, dy: m2.dy * 2, src: 'stage' };   // (stage + pictures: no hand sliders)
     refined.set(key, out); return out;
   }
