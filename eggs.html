@@ -385,7 +385,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23p'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23q'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-2';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -1788,6 +1788,9 @@ document.documentElement.lang = 'en';
         if (!rig.zSet && stageLim.zRef !== 'switch') { rig.zSet = true; let z = 0; try { z = parseFloat(localStorage.getItem('eggStageZ')) || 0; } catch {} rig.zero[2] = rig.mpos[2] - z; }   // carry Z on from the last session
         rig.pos = rig.mpos.map((v, i) => v - rig.zero[i]);
         if (rig.track) rig.track.push([performance.now(), rig.pos[2]]);
+        // where the stage is, kept while homed (for the next Home: see homeAll); any move while not homed makes it unknown
+        if (rig.homed && rig.state === 'Idle') { const k = rig.pos.map(v => v.toFixed(1)).join(','); if (k !== rig.lastKept) { rig.lastKept = k; try { localStorage.setItem('eggLastPos', JSON.stringify(rig.pos)); } catch {} } }
+        else if (!rig.homed && !rig.homing && /Jog|Run|Home/.test(rig.state) && rig.lastKept !== 'unknown') { rig.lastKept = 'unknown'; try { localStorage.removeItem('eggLastPos'); } catch {} }
         if (rig.state === 'Idle' && rig.pos[2] !== rig.zSaved) { rig.zSaved = rig.pos[2]; try { localStorage.setItem('eggStageZ', rig.pos[2].toFixed(3)); } catch {} }
       }
       const pn = m.find(f => f.startsWith('Pn:')); rig.pins = pn ? pn.slice(3) : '';
@@ -1921,9 +1924,13 @@ document.documentElement.lang = 'en';
     // Z first moves down 3 mm (unless its switch already reads pressed), so it always comes up to the switch from below
     await stageRaw('?'); await sleepMs(150);
     if (!rig.pins.includes('Z')) { stageMsg('Homing Z: down 3 mm first…'); await stageSend(`$J=G91 G21 Z-3 F${FEED.Z}`); await stageIdle(); }
-    stageMsg('Homing Z: up to its switch…'); await seekSwitch('Z', 30, 1);
-    stageMsg('Homing Y: forwards to its switch…'); await seekSwitch('Y', 46);
-    stageMsg('Homing X: left to its switch…'); await seekSwitch('X', 310);
+    // When the stage's last place is known (kept while homed, nothing moved since), each axis may go only as far as its
+    // switch should be plus 4 mm: a switch that does not answer then stops the slide short of the column (23 Nov, Y).
+    let last = null; try { last = JSON.parse(localStorage.getItem('eggLastPos') || 'null'); } catch {}
+    const reach = (i, travel, need) => last ? Math.max(6, Math.min(travel, need + 4)) : travel;
+    stageMsg('Homing Z: up to its switch…'); await seekSwitch('Z', reach(2, 30, last ? 2 - last[2] + 3 : 0), 1);
+    stageMsg('Homing Y: forwards to its switch…'); await seekSwitch('Y', reach(1, 46, last ? last[1] + 2 : 0));
+    stageMsg('Homing X: left to its switch…'); await seekSwitch('X', reach(0, 310, last ? last[0] + 2 : 0));
     await stageRaw('?'); await sleepMs(250);
     rig.zero = rig.mpos.slice(); rig.pos = [0, 0, 0]; rig.homed = true;   // Z 0 is 2 mm below its switch; the microscope works below it (negative Z)
     // The Z band (where the pods are in focus) was kept relative to the remembered Z; the first time Z is homed it is
