@@ -385,7 +385,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23k'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23l'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-2';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -686,8 +686,8 @@ document.documentElement.lang = 'en';
   function stageShift(a, b) {
     const pa = stagePos(a), pb = stagePos(b);
     if (!pa || !pb || !stageCal || stageCal.xu == null || pa.s !== pb.s || Math.abs(pa.s - stageCal.pxPerMm) > 1.5) return null;
-    const p = predShift(a, b, pa, pb), k = podScale(a);
-    return refineShift(a, b, p.s * k, p.dy * k) || { s: p.s * k, dy: p.dy * k, src: 'stage' };
+    const p = predShift(a, b, pa, pb), { k, off } = podScale(a), dy = p.dy * k + off;
+    return refineShift(a, b, p.s * k, dy) || { s: p.s * k, dy, src: 'stage' };
   }
   function predShift(a, b, pa = stagePos(a), pb = stagePos(b)) {
     const dX = pb.x - pa.x, dY = pb.y - pa.y;   // the picture's content moved by (dX*xu + dY*du, dX*xv + dY*dv); b(x) = a(x + s)
@@ -730,7 +730,7 @@ document.documentElement.lang = 'en';
     const side = (a.shot || '')[0], shots = sideShots(a.pod, side).filter(p => p.bmp && stagePos(p));
     const sig = a.pod + side + '|' + shots.map(p => p.key).join(',') + '|' + stageCal.xu + stageCal.xv;
     if (scales.has(sig)) return scales.get(sig);
-    const ratios = [];
+    const ratios = [], offs = [];
     for (let i = 0; i + 1 < shots.length; i++) {
       const x = shots[i], y = shots[i + 1]; if (Math.abs(+posOf(y) - +posOf(x)) !== 1 || x.origW !== y.origW) continue;
       const p = predShift(x, y); if (Math.abs(p.s) < 0.2 * x.origW) continue;
@@ -738,10 +738,16 @@ document.documentElement.lang = 'en';
       let ratio = pairRatio.get(pk);
       if (ratio === undefined) { const m = bestNcc(edgeMap(x), edgeMap(y), Math.round(p.s / 4), Math.round(p.dy / 4), 40, 2, 400); ratio = m.r > 0.05 ? m.s * 4 / p.s : null; pairRatio.set(pk, ratio); }
       if (ratio != null) ratios.push(ratio);
+      // the steady up/down error per step (camera angle, Y backlash: ~85 px on 23 Nov), from seams with a clear outline
+      const ok = 'o|' + pk; let o = pairRatio.get(ok);
+      if (o === undefined) { const sl = silDy(edgeMap(x), edgeMap(y), Math.round(p.s * (ratio || 1) / 4), Math.round(p.dy / 4), 50); o = sl.r >= 0.5 ? sl.dy * 4 - p.dy : null; pairRatio.set(ok, o); }
+      if (o != null) offs.push(o);
     }
     ratios.sort((u, v) => u - v);
     const k = ratios.length >= 2 ? Math.min(1.15, Math.max(0.87, ratios[ratios.length >> 1])) : 1;
-    scales.set(sig, k); return k;
+    offs.sort((u, v) => u - v);
+    const out = { k, off: offs.length >= 2 ? Math.max(-250, Math.min(250, offs[offs.length >> 1])) : 0 };
+    scales.set(sig, out); return out;
   }
   // Up/down from the pod's silhouette (its outline against the board is the same in both shots, sharp or not; the
   // Y stage can fall short on a long move: 160 px at one seam on 23 Nov). Left/right it says little (the pod runs
@@ -765,8 +771,8 @@ document.documentElement.lang = 'en';
     const A = edgeMap(a), B = edgeMap(b), s4 = Math.round(s / 4); let d4 = Math.round(dy / 4);
     const sl = silDy(A, B, s4, d4, 50);   // +-200 px
     if (sl.r >= 0.4) d4 = sl.dy;
-    const m4 = bestNcc(A, B, s4, d4, 6, 2, 400);
-    const ok = m4.r >= 0.05 && Math.abs(m4.dy - d4) <= 3;   // detail agrees with the outline: take it, else keep these
+    const m4 = bestNcc(A, B, s4, d4, sl.r >= 0.4 ? 6 : 12, 2, 400);
+    const ok = m4.r >= 0.05 && (sl.r < 0.4 || Math.abs(m4.dy - d4) <= 3);   // detail agrees with the outline: take it, else keep these
     const c4 = ok ? m4 : { s: s4, dy: d4 };
     const m2 = ok ? bestNcc(edgeMap(a, 2), edgeMap(b, 2), c4.s * 2, c4.dy * 2, 3, 2, 1200) : { s: c4.s * 2, dy: c4.dy * 2 };
     const out = { s: m2.s * 2, dy: m2.dy * 2, src: 'stage' };   // (stage + pictures: no hand sliders)
