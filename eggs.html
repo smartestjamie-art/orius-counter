@@ -398,7 +398,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23zj'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23zk'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-3';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -762,13 +762,11 @@ document.documentElement.lang = 'en';
       const x = shots[i], y = shots[i + 1]; if (Math.abs(+posOf(y) - +posOf(x)) !== 1 || x.origW !== y.origW) continue;
       const p = predShift(x, y); if (Math.abs(p.s) < 0.2 * x.origW) continue;
       const pk = x.key + '|' + y.key + '|' + Math.round(p.s);   // each seam measured once
-      let ratio = pairRatio.get(pk);
-      if (ratio === undefined) { const m = bestNcc(edgeMap(x), edgeMap(y), Math.round(p.s / 4), Math.round(p.dy / 4), 40, 2, 400); ratio = m.r > 0.05 ? m.s * 4 / p.s : null; pairRatio.set(pk, ratio); }
-      if (ratio != null) ratios.push(ratio);
-      // the steady up/down error per step (camera angle, Y backlash: ~85 px on 23 Nov), from seams with a clear outline
-      const ok = 'o|' + pk; let o = pairRatio.get(ok);
-      if (o === undefined) { const sl = silDy(edgeMap(x), edgeMap(y), Math.round(p.s * (ratio || 1) / 4), Math.round(p.dy / 4), 50); o = sl.r >= 0.5 ? sl.dy * 4 - p.dy : null; pairRatio.set(ok, o); }
-      if (o != null) offs.push(o);
+      // each seam matched once on the pod's detail, widely: its scale and its up/down error against the stage
+      // (the outline is not used: on a pod lying at an angle it slides along itself and gave 100-200 px steps, egg 7)
+      let mm = pairRatio.get(pk);
+      if (mm === undefined) { const m = bestNcc(edgeMap(x), edgeMap(y), Math.round(p.s / 4), Math.round(p.dy / 4), 40, 2, 400); mm = m.r > 0.05 ? { ratio: m.s * 4 / p.s, off: m.dy * 4 - p.dy } : null; pairRatio.set(pk, mm); }
+      if (mm) { ratios.push(mm.ratio); offs.push(mm.off); }
     }
     ratios.sort((u, v) => u - v);
     const k = ratios.length >= 2 ? Math.min(1.15, Math.max(0.87, ratios[ratios.length >> 1])) : 1;
@@ -796,10 +794,9 @@ document.documentElement.lang = 'en';
     if (!a.bmp || !b.bmp || a.origW !== b.origW || a.origH !== b.origH) return null;
     const key = a.key + '|' + b.key + '|' + Math.round(s) + '|' + Math.round(dy), had = refined.get(key); if (had !== undefined) return had || null;
     const A = edgeMap(a), B = edgeMap(b), s4 = Math.round(s / 4); let d4 = Math.round(dy / 4);
-    const sl = silDy(A, B, s4, d4, 50);   // +-200 px
-    if (sl.r >= 0.4) d4 = sl.dy;
-    const m4 = bestNcc(A, B, s4, d4, sl.r >= 0.4 ? 6 : 12, 2, 400);
-    const ok = m4.r >= 0.05 && (sl.r < 0.4 || Math.abs(m4.dy - d4) <= 3);   // detail agrees with the outline: take it, else keep these
+    // around the pod's own fitted step only (+-24 px): seams agree with each other, an odd local match cannot move one far
+    const m4 = bestNcc(A, B, s4, d4, 6, 2, 400);
+    const ok = m4.r >= 0.05;
     const c4 = ok ? m4 : { s: s4, dy: d4 };
     const m2 = ok ? bestNcc(edgeMap(a, 2), edgeMap(b, 2), c4.s * 2, c4.dy * 2, 3, 2, 1200) : { s: c4.s * 2, dy: c4.dy * 2 };
     const out = { s: m2.s * 2, dy: m2.dy * 2, src: 'stage' };   // (stage + pictures: no hand sliders)
