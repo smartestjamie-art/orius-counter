@@ -386,7 +386,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23b'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23c'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-1';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -796,8 +796,10 @@ document.documentElement.lang = 'en';
       for (const [x, y] of ph.outline) { const [X, Y] = at(x, y); if (X > -2 && Y > -2 && X < clip[0] + 2 && Y < clip[1] + 2) ctx.fillRect(X - s / 2, Y - s / 2, s, s); }
     }
     if (!$('showMarks').checked) return;
-    const m = marks(ph), rd = dot || Math.max(2 * dpr, (ph.eggD || 4) * k * 0.45);
-    const layers = [[m.kept, '#22e57f', 'dot'], [m.added, fixing ? '#3db8ff' : '#22e57f', 'dot']];
+    // microscope photos: a ring round each egg, so the egg itself stays visible to check
+    const ring = isStagePhoto(ph), mk = ring ? 'ring' : 'dot';
+    const m = marks(ph), rd = ring ? Math.max(4 * dpr, ((ph.dotD || 12) / 2 + 4) * k) : dot || Math.max(2 * dpr, (ph.eggD || 4) * k * 0.45);
+    const layers = [[m.kept, ring ? '#ff2bd6' : '#22e57f', mk], [m.added, fixing ? '#3db8ff' : ring ? '#ff2bd6' : '#22e57f', mk]];
     if (fixing) layers.unshift([ph.dropped || [], 'rgba(220,228,222,.9)', 'ring']), layers.push([m.struck, '#ff4d4d', 'dot']);
     for (const [pts, color, kind] of layers) {
       ctx.beginPath();
@@ -1008,7 +1010,7 @@ document.documentElement.lang = 'en';
     for (const { ph, x0, x1, ox, oy } of parts)
       ctx.drawImage(ph.bmp, x0, 0, x1 - x0, ph.origH, (ox + x0 - left) * scale, (oy - top) * scale, (x1 - x0) * scale, ph.origH * scale);
     if ($('showMarks').checked) {
-      const r = Math.max(1.6, (parts[0].ph.eggD || 4) * scale * 0.45);
+      const r = isStagePhoto(parts[0].ph) ? Math.max(2, ((parts[0].ph.dotD || 12) / 2 + 4) * scale) : Math.max(1.6, (parts[0].ph.eggD || 4) * scale * 0.45);
       ctx.beginPath();
       for (const { ph, x0, x1, ox, oy } of parts) {
         const m = marks(ph);
@@ -1016,7 +1018,8 @@ document.documentElement.lang = 'en';
           const X = (ox + x - left) * scale, Y = (oy + y - top) * scale; ctx.moveTo(X + r, Y); ctx.arc(X, Y, r, 0, Math.PI * 2); n++;
         }
       }
-      ctx.fillStyle = '#22e57f'; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.lineWidth = 1; ctx.stroke();
+      if (isStagePhoto(parts[0].ph)) { ctx.strokeStyle = '#ff2bd6'; ctx.lineWidth = Math.max(1, r * 0.25); ctx.stroke(); }
+      else { ctx.fillStyle = '#22e57f'; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.lineWidth = 1; ctx.stroke(); }
     }
     return c;
   }
