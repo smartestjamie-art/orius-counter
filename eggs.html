@@ -385,7 +385,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23n'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23o'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-2';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -2115,7 +2115,9 @@ document.documentElement.lang = 'en';
     // every height from the lowest to the highest sharp part (a cell's surface slopes: its in-between heights matter too),
     // all frames near a part's peak, every other one between
     const ks = [...keep].filter(i => i >= 0 && i < n), k0 = Math.min(...ks), k1 = Math.max(...ks);
-    let pick = frames.filter((f, i) => i >= k0 && i <= k1 && (keep.has(i) || (i - k0) % 2 === 0));
+    // the whole band every other frame (about 0.5 mm): a selection by the grid cells left the pod's sloping sides
+    // without their sharp height (egg 2, 23 Nov); plus every frame near a part's peak
+    let pick = frames.filter((f, i) => keep.has(i) || i % 2 === 0);
     if (pick.length < 3) pick = frames.filter((f, i) => i % 2 === 0);
     const sweptS = (performance.now() - t0) / 1000;
     const view = frames.reduce((a, f) => Math.abs(f.focus - RIG.park.z) < Math.abs(a.focus - RIG.park.z) ? f : a).small;   // the pod near its usual focus, for the tail check
