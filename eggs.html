@@ -398,7 +398,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23zg'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23zh'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-3';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -694,9 +694,10 @@ document.documentElement.lang = 'en';
   // keeps its own copy only once it has calibrated or changed something itself.
   const RIG = {
     cal: { du: -0.00208, dv: -0.03889, xu: 0.02917, xv: -0.00278, pxPerMm: 75.8, W: 2592, H: 1944 },   // picture moves for 1 mm of Y and X
-    lim: { x: 300, y: 40, zlo: -22.5, zhi: -4, zRef: 'switch' },   // Z from its top switch (0 = 2 mm below it). Board in focus at -21.9, pod tops near -14.4 (22 Nov); curled or torn parts of a pod stand higher, up to about -9, so zhi keeps a margin
+    lim: { x: 300, y: 40, zlo: -37.5, zhi: -4, zRef: 'switch' },   // 23 Nov: after the Z switch was knocked, the pod is in focus at -29 (was -14.4), so the board is at about -36.5
+      // Z from its top switch (0 = 2 mm below it). Board in focus at -21.9, pod tops near -14.4 (22 Nov); curled or torn parts of a pod stand higher, up to about -9, so zhi keeps a margin
                                                                       // Y: the tray hit the column further back (22 Nov), pods lie near Y 23
-    park: { x: 1, y: 23, z: -14.4 },   // where Home leaves the stage: the pod's line under the lens, in focus
+    park: { x: 1, y: 16, z: -29 },   // the start spot set by hand on 23 Nov (pod's right end, across the middle, in focus): Home parks here, scans start here
     zStack: { lo: -4.5, hi: 1.0 }, zStep: 0.3, zStackMax: 60,
     sweep: { lo: -22.4, hi: -4.2, feed: 105, gap: 0.25, board: -21.9 },   // focus stack: Z moves through this whole band without stopping (mm/min), a frame kept every 0.25 mm   // pod top in focus at -14.4, board at -21.9 (22 Nov): the pod's sides lie below the focus
   };
@@ -1870,7 +1871,7 @@ document.documentElement.lang = 'en';
   // the move (jog, centring, scan). Z has no switch yet, so Z is not limited. Limits are kept in the browser.
   const AX = { X: 0, Y: 1, Z: 2 };
   const stageLim = { ...RIG.lim };   // Z: the band the pods' surface sits in (they all lie at one height), with room for focus stacks
-  try { const l = JSON.parse(localStorage.getItem('eggStageLim') || '{}'); if (l.zRef === 'switch') { Object.assign(stageLim, l); stageLim.y = Math.min(stageLim.y ?? RIG.lim.y, RIG.lim.y); stageLim.zlo = Math.max(stageLim.zlo, RIG.lim.zlo); stageLim.zhi = Math.max(stageLim.zhi, RIG.lim.zhi); } } catch {}   // never more Y than the rig allows   // older copies (Z without its switch) are ignored
+  try { const l = JSON.parse(localStorage.getItem('eggStageLim') || '{}'); if (l.zRef === 'switch') { Object.assign(stageLim, l); stageLim.y = Math.min(stageLim.y ?? RIG.lim.y, RIG.lim.y); stageLim.zlo = RIG.lim.zlo; stageLim.zhi = Math.max(stageLim.zhi, RIG.lim.zhi); } } catch {}   // never more Y than the rig allows   // older copies (Z without its switch) are ignored
   const limSave = () => { try { localStorage.setItem('eggStageLim', JSON.stringify(stageLim)); } catch {} $('stageMaxX').value = stageLim.x; $('stageMaxY').value = stageLim.y ?? ''; $('stageZLo').value = stageLim.zlo; $('stageZHi').value = stageLim.zhi; };
   // Z has no switch: its position is remembered in the browser between sessions (the motors hold while powered and the
   // lead screw does not slip), so the Z band applies whether or not X and Y are homed.
@@ -2023,7 +2024,7 @@ document.documentElement.lang = 'en';
   });
   // The fixed spot (set once by hand, 23 Nov): where Home parks and every side's scan starts, with Y kept there (no
   // centring) and Z's sweep centred on its focus height. Without it: the old park place, centring and end-finding.
-  const spot = () => { try { const v = JSON.parse(localStorage.getItem('eggSpot') || 'null'); return v && v.length === 3 && v.every(Number.isFinite) ? v : null; } catch { return null; } };
+  const spot = () => { try { const v = JSON.parse(localStorage.getItem('eggSpot') || 'null'); if (v && v.length === 3 && v.every(Number.isFinite)) return v; } catch {} return [RIG.park.x, RIG.park.y, RIG.park.z]; };   // set by the button, else the one in RIG
   const focusZ = () => (spot() || [0, 0, RIG.park.z])[2];
   const spotNote = () => { const v = spot(); $('stageSpotNote').textContent = v ? `Start spot: X ${v[0].toFixed(1)}, Y ${v[1].toFixed(1)}, Z ${v[2].toFixed(2)} (Home parks here; every scan starts here).` : 'No start spot set: jog to the pod\'s right end, centred and in focus, then press Remember this spot.'; };
   $('stageSpotBtn').onclick = () => {
@@ -2195,7 +2196,7 @@ document.documentElement.lang = 'en';
     if (!stream || !video.videoWidth) throw new Error('Start the camera first.');
     const L = limitOf(2); if (!L) throw new Error('Press Home first.');
     // the band: 8 mm below to 10.2 mm above the pod's focus height (the start spot's Z when set; -22.4 to -4.2 by default)
-    const S = RIG.sweep, fz = focusZ(), lo = Math.max(L[0], fz - (RIG.park.z - S.lo)), hi = Math.min(L[1], fz + (S.hi - RIG.park.z)), from = up ? lo : hi, to = up ? hi : lo;
+    const S = RIG.sweep, fz = focusZ(), lo = Math.max(L[0], fz - 8), hi = Math.min(L[1], fz + 10.2), from = up ? lo : hi, to = up ? hi : lo;
     const t0 = performance.now();
     await stageMoveTo({ z: from });
     await nextFrame(); const cells = stackCells(video, video.videoWidth, video.videoHeight);
