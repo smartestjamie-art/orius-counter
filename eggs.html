@@ -226,7 +226,9 @@
         <div class="row">
           <button class="small" id="stageHomeBtn" title="Find the Z, Y and X limit switches (Z first, upwards), then go to the start position">Home</button>
           <button class="small" id="stageUnlockBtn" title="Clear an alarm without homing">Unlock</button>
+          <button class="small" id="stageSpotBtn" title="Jog to where a scan should start (the pod's right end, the pod across the middle, in focus), then press this">Remember this spot</button>
         </div>
+        <p class="note" id="stageSpotNote"></p>
         <div class="field"><label for="stageStep">Jog step mm</label>
           <select id="stageStep"><option>0.02</option><option>0.1</option><option selected>1</option><option>5</option><option>20</option></select></div>
         <div class="row">
@@ -396,7 +398,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23zh'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23zg'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-3';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -2019,6 +2021,17 @@ document.documentElement.lang = 'en';
     // a scan cut short by a flicker on a switch wire carries on by itself (its missing shots), at most 3 times a scan
     if (rig.resume) { rig.resume = false; if ((rig.resumes = (rig.resumes || 0) + 1) <= 3) { stageMsg('Carrying on with the scan where it stopped…'); setTimeout(() => $('stageScanBtn').click(), 800); } }
   });
+  // The fixed spot (set once by hand, 23 Nov): where Home parks and every side's scan starts, with Y kept there (no
+  // centring) and Z's sweep centred on its focus height. Without it: the old park place, centring and end-finding.
+  const spot = () => { try { const v = JSON.parse(localStorage.getItem('eggSpot') || 'null'); return v && v.length === 3 && v.every(Number.isFinite) ? v : null; } catch { return null; } };
+  const focusZ = () => (spot() || [0, 0, RIG.park.z])[2];
+  const spotNote = () => { const v = spot(); $('stageSpotNote').textContent = v ? `Start spot: X ${v[0].toFixed(1)}, Y ${v[1].toFixed(1)}, Z ${v[2].toFixed(2)} (Home parks here; every scan starts here).` : 'No start spot set: jog to the pod\'s right end, centred and in focus, then press Remember this spot.'; };
+  $('stageSpotBtn').onclick = () => {
+    if (!rig.homed) { stageMsg('Press Home first, so the spot is measured from the switches.'); return; }
+    try { localStorage.setItem('eggSpot', JSON.stringify(rig.pos.map(v => +v.toFixed(3)))); } catch {}
+    spotNote(); stageMsg('Remembered this spot: Home parks here and every scan starts here.');
+  };
+  spotNote();
   async function homeAll() {
     try { await stageSend('$X'); } catch {}
     await stageRaw('?'); await sleepMs(250);
@@ -2048,7 +2061,7 @@ document.documentElement.lang = 'en';
     await stageSend('$21=0'); rig.homing = false;
     // Always end at the same parking place (not "back where it was": after the Arduino restarts that place is not
     // known for sure, and Y going back blindly hit the column on 22 Nov).
-    stageMsg('Homed. Moving to the start position…'); await stageMoveTo({ x: RIG.park.x, y: Math.min(RIG.park.y, stageLim.y) }); await stageMoveTo({ z: RIG.park.z });
+    stageMsg('Homed. Moving to the start position…'); { const v = spot() || [RIG.park.x, Math.min(RIG.park.y, stageLim.y), RIG.park.z]; await stageMoveTo({ x: v[0], y: v[1] }); await stageMoveTo({ z: v[2] }); }
     stageMsg(`Homed. Limits: X 0–${stageLim.x} mm, Y 0–${stageLim.y} mm, Z ${stageLim.zlo} to ${stageLim.zhi} mm (Z 0 is 2 mm below its switch).`);
   }
   limSave();
@@ -2181,7 +2194,8 @@ document.documentElement.lang = 'en';
   async function zSweepStack(up = true) {
     if (!stream || !video.videoWidth) throw new Error('Start the camera first.');
     const L = limitOf(2); if (!L) throw new Error('Press Home first.');
-    const S = RIG.sweep, lo = Math.max(L[0], S.lo), hi = Math.min(L[1], S.hi), from = up ? lo : hi, to = up ? hi : lo;
+    // the band: 8 mm below to 10.2 mm above the pod's focus height (the start spot's Z when set; -22.4 to -4.2 by default)
+    const S = RIG.sweep, fz = focusZ(), lo = Math.max(L[0], fz - (RIG.park.z - S.lo)), hi = Math.min(L[1], fz + (S.hi - RIG.park.z)), from = up ? lo : hi, to = up ? hi : lo;
     const t0 = performance.now();
     await stageMoveTo({ z: from });
     await nextFrame(); const cells = stackCells(video, video.videoWidth, video.videoHeight);
@@ -2236,7 +2250,7 @@ document.documentElement.lang = 'en';
     let pick = frames.filter((f, i) => keep.has(i) || i % 2 === 0);
     if (pick.length < 3) pick = frames.filter((f, i) => i % 2 === 0);
     const sweptS = (performance.now() - t0) / 1000;
-    const view = frames.reduce((a, f) => Math.abs(f.focus - RIG.park.z) < Math.abs(a.focus - RIG.park.z) ? f : a).small;   // the pod near its usual focus, for the tail check
+    const view = frames.reduce((a, f) => Math.abs(f.focus - fz) < Math.abs(a.focus - fz) ? f : a).small;   // the pod near its usual focus, for the tail check
     return { pick, all: n, used, edgeLo, edgeHi, zmin: frames[0].focus, zmax: frames[n - 1].focus, sweptS, view };
   }
   async function mergeSweep(sw) {
@@ -2465,6 +2479,12 @@ document.documentElement.lang = 'en';
     return true;
   }
   // Is the pod still running out of the picture on the side the view is travelling to? (false: it ends in this picture)
+  function podInView() {   // some pod in the picture (more than 1 %)
+    const v = $('video'), w = 160, h = Math.round(160 * v.videoHeight / v.videoWidth), c = document.createElement('canvas'); c.width = w; c.height = h;
+    const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(v, 0, 0, w, h); const d = x.getImageData(0, 0, w, h).data; let g = 0;
+    for (let j = 0; j < d.length; j += 4) if (isPod(d[j], d[j + 1], d[j + 2])) g++;
+    return g > 0.01 * w * h;
+  }
   function podRunsOn(src) {
     const v = src || $('video'), w = 160, h = Math.round(160 * (v.videoHeight || v.height) / (v.videoWidth || v.width));
     const c = podCentre.c3 || (podCentre.c3 = document.createElement('canvas')); c.width = w; c.height = h;
@@ -2515,7 +2535,9 @@ document.documentElement.lang = 'en';
     // height or angle may have changed since: moved rig, straightened column), then kept
     // bring the pod into the middle first (with the calibration kept from before), so the calibration below measures
     // the pod and not the board's repeating squares (they gave Y 2 px/mm with only the pod's tip in a corner, 23 Nov)
-    if (stageCal && stageCal.du != null) { try { await stageCentrePod(); } catch {} }
+    const fixed = spot(), first0 = nextShot(podId), newSide = !first0 || parseInt(first0.slice(1), 10) === 1;
+    if (fixed && newSide) { stageMsg('Going to the start spot…'); await stageMoveTo({ x: fixed[0], y: fixed[1] }); await stageMoveTo({ z: fixed[2] }); await sleepMs(300); await nextFrame(); }
+    else if (stageCal && stageCal.du != null) { try { await stageCentrePod(); } catch {} }
     { // a pod must be in view at the start (else the calibration has only the plain board to measure)
       const v = $('video'), w = 160, h = Math.round(160 * v.videoHeight / v.videoWidth), c = document.createElement('canvas'); c.width = w; c.height = h;
       const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(v, 0, 0, w, h); const d = x.getImageData(0, 0, w, h).data; let g = 0;
@@ -2531,7 +2553,7 @@ document.documentElement.lang = 'en';
     const dx = parseFloat($('stageStepX').value), first = nextShot(podId), k0 = first ? parseInt(first.slice(1), 10) - 1 : 0;
     let starts = {}; try { starts = JSON.parse(localStorage.getItem('eggSideStart') || '{}'); } catch {}
     const sideKey = podId + '|' + (first || 'A')[0];
-    if (k0 === 0) await findStartMark();   // a new side: start at the pod's own end
+    if (k0 === 0 && !fixed) await findStartMark();   // a new side without a start spot: start at the pod's own end
     const x0 = k0 === 0 ? +rig.pos[0].toFixed(2) : starts[sideKey] ?? parseFloat($('stageStartX').value);
     if (k0 === 0) { starts[sideKey] = x0; try { localStorage.setItem('eggSideStart', JSON.stringify(starts)); } catch {} }
     $('stageStartX').value = x0;
@@ -2546,8 +2568,9 @@ document.documentElement.lang = 'en';
       const xT = x0 + k * dx;
       if (xT < -0.01 || xT > stageLim.x + 0.01) { stageMsg(`X ${xT.toFixed(1)} mm is outside the limit (0–${stageLim.x}): the scan stops here.`); break; }
       stageMsg(`Shot ${shot}: moving to X ${xT.toFixed(2)}…`);
-      await stageMoveTo(sweeping ? { x: xT, z: RIG.park.z } : { x: xT }); await sleepMs(250);   // Z back near the pod's focus, so the centring sees it
-      const seen = centre ? await stageCentrePod() : true;
+      await stageMoveTo(sweeping ? { x: xT, z: focusZ() } : { x: xT }); await sleepMs(250);   // Z back near the pod's focus, so the centring sees it
+      // with a start spot Y stays where it was set (the pods lie in the same place); otherwise Y centres the pod
+      const seen = centre && !fixed ? await stageCentrePod() : podInView();
       if (!seen) { if (n) { stageMsg('The pod ends here.'); break; } throw new Error('No pod in view at the start: move X (and Y) until it is.'); }
       if (sweeping) {   // sweep here, merge while the stage goes on to the next spot
         const tag = stageTag(), key = podId + '|' + shot; reservedShots.add(key);
@@ -2560,11 +2583,11 @@ document.documentElement.lang = 'en';
       }
       n++;
       await nextFrame();
-      if (centre && (seen === 'tail' || !podRunsOn(view))) { stageMsg('The pod ends here.'); break; }   // its tail is in this shot
+      if ((centre || fixed) && (seen === 'tail' || !podRunsOn(view))) { stageMsg('The pod ends here.'); break; }   // its tail is in this shot
       if (k + 1 >= MARKS) { stageMsg('outside the limit: more shots per side are needed for this pod.'); break; }
     }
     const end = $('stageNote').textContent;
-    if (n && !rig.scanStop) await stageMoveTo(sweeping ? { x: x0, z: RIG.park.z } : { x: x0 });   // back to the start, ready for the other side
+    if (n && !rig.scanStop) await stageMoveTo(sweeping ? { x: x0, z: focusZ() } : { x: x0 });   // back to the start, ready for the other side
     if (sweeping) { stageMsg('Merging the last shots…'); await merging; }
     const mins = ((performance.now() - t0) / 60000).toFixed(1); rig.resumes = 0;
     const yWarn = rig.yWarn; rig.yWarn = null;
