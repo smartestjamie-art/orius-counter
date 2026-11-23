@@ -385,7 +385,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23g'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23h'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-1';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -1884,7 +1884,10 @@ document.documentElement.lang = 'en';
     // Z first, upwards: it lifts the microscope clear of the pod before anything moves under it.
     // each search goes no further than the axis's whole travel (+ a little): a switch that does not answer (unplugged,
     // knocked out of place) must not let the slide run on into its end and push the switch away (23 Nov, Z)
-    stageMsg('Homing Z: up to its switch…'); await seekSwitch('Z', 27, 1);
+    // Z first moves down 3 mm (unless its switch already reads pressed), so it always comes up to the switch from below
+    await stageRaw('?'); await sleepMs(150);
+    if (!rig.pins.includes('Z')) { stageMsg('Homing Z: down 3 mm first…'); await stageSend(`$J=G91 G21 Z-3 F${FEED.Z}`); await stageIdle(); }
+    stageMsg('Homing Z: up to its switch…'); await seekSwitch('Z', 30, 1);
     stageMsg('Homing Y: forwards to its switch…'); await seekSwitch('Y', 46);
     stageMsg('Homing X: left to its switch…'); await seekSwitch('X', 310);
     await stageRaw('?'); await sleepMs(250);
