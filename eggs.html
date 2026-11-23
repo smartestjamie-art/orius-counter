@@ -394,7 +394,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23zg'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-23ze'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-3';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -1976,7 +1976,7 @@ document.documentElement.lang = 'en';
         if ((await pins()).includes(ax)) throw new Error(`The ${ax} switch does not release: check it.`);
         await stageSend(`$J=G91 G21 ${ax}${AWAY[ax] * 3} F${FEED[ax]}`); await stageIdle();
       }
-      await stageSend('$21=1');
+      await stageSend('$21=0');
       glitch = !/[XYZ]/.test(p);
       stageMsg(glitch ? 'A limit signal flickered but no switch was pressed (electrical noise on a switch wire): finding the switches again…'
         : `Backed off the ${p.replace(/[^XYZ]/g, '')} switch. Press Home before scanning again.`);
@@ -2030,7 +2030,10 @@ document.documentElement.lang = 'en';
     // The Z band (where the pods are in focus) was kept relative to the remembered Z; the first time Z is homed it is
     // moved onto the switch's zero, once. From then on it stays relative to the switch.
     if (stageLim.zRef !== 'switch') { const d = oldZero - rig.zero[2]; stageLim.zlo = +(stageLim.zlo + d).toFixed(2); stageLim.zhi = +(Math.min(0, stageLim.zhi + d)).toFixed(2); stageLim.zRef = 'switch'; limSave(); }
-    await stageSend('$21=1'); rig.homing = false;
+    // GRBL's hard limits stay OFF (the user's choice, 23 Nov): switch-wire noise while the motors run fired an alarm
+    // every ~30 s, each stopping everything and homing again. The page keeps every move inside the limits. Turn back on
+    // ($21=1 here and in bounceOff) once the switch inputs have 0.1 uF capacitors.
+    await stageSend('$21=0'); rig.homing = false;
     // Always end at the same parking place (not "back where it was": after the Arduino restarts that place is not
     // known for sure, and Y going back blindly hit the column on 22 Nov).
     stageMsg('Homed. Moving to the start position…'); await stageMoveTo({ x: RIG.park.x, y: Math.min(RIG.park.y, stageLim.y) }); await stageMoveTo({ z: RIG.park.z });
