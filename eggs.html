@@ -277,6 +277,7 @@
         <div class="field"><label for="stageStepX">X step per shot mm</label><input type="number" id="stageStepX" value="24" min="0.5" step="0.5"></div>
         <div class="field"><label for="stageShots">Shots per side (most)</label><select id="stageShots"></select></div>
         <label class="check"><input type="checkbox" id="stageCentre" checked> Keep the pod centred with Y, and stop where the pod ends</label>
+        <label class="check"><input type="checkbox" id="stageFitCheck" checked> Before a new side, run along the pod once to check it fits (about 30 s)</label>
         <label class="check"><input type="checkbox" id="stageAutoStep" checked> X step from the calibration (30 % overlap)</label>
             <div class="row" style="margin-top:4px"><button class="small" id="stageCalBtn" title="With the pod in view: moves Y by 1 mm and back, and measures how far the pod moved in the picture">Calibrate (moves X and Y 3 mm)</button><span class="meta" id="stageCalNote" style="margin:0"></span></div>
         <label class="check"><input type="checkbox" id="stageScanAf" checked> Autofocus at every shot</label>
@@ -398,7 +399,7 @@ document.documentElement.lang = 'en';
   if (settings.matcher !== MATCHER) { settings.learned = {}; settings.matcher = MATCHER; try { localStorage.setItem('eggSettings', JSON.stringify(settings)); } catch {} }
   const saveSettings = () => { try { localStorage.setItem('eggSettings', JSON.stringify(settings)); localStorage.setItem('eggPod', podId); } catch {} };
 
-  const BUILD = '2026-11-23zn'; // bump with every change to a worker, so a browser never keeps an old copy
+  const BUILD = '2026-11-27b'; // bump with every change to a worker, so a browser never keeps an old copy
   const EGG_COUNTER = 'eggs-3'; // the worker's VERSION: photos counted with an older one are recounted
   const WHITE_COUNTER = 'white-3';   // microscope stage photos (scale tag _S in the name): white round eggs, below
   const isStagePhoto = ph => /_S\d+(?=[_.])/.test(ph.name || '');
@@ -699,7 +700,7 @@ document.documentElement.lang = 'en';
                                                                       // Y: the tray hit the column further back (22 Nov), pods lie near Y 23
     park: { x: 1, y: 16, z: -29 },   // the start spot set by hand on 23 Nov (pod's right end, across the middle, in focus): Home parks here, scans start here
     zStack: { lo: -4.5, hi: 1.0 }, zStep: 0.3, zStackMax: 60,
-    sweep: { lo: -22.4, hi: -4.2, feed: 105, gap: 0.25, board: -21.9 },   // focus stack: Z moves through this whole band without stopping (mm/min), a frame kept every 0.25 mm   // pod top in focus at -14.4, board at -21.9 (22 Nov): the pod's sides lie below the focus
+    sweep: { lo: -22.4, hi: -4.2, feed: 105, gap: 0.25, board: -36.5 },   // focus stack: Z moves through this whole band without stopping (mm/min), a frame kept every 0.25 mm   // pod top in focus at -14.4, board at -21.9 (22 Nov): the pod's sides lie below the focus
   };
   let stageCal = RIG.cal;
   try { const c = JSON.parse(localStorage.getItem('eggStageCal') || 'null'); if (c && c.xu != null) stageCal = c; } catch {}
@@ -1964,7 +1965,7 @@ document.documentElement.lang = 'en';
   };
   async function stageRun(btn, fn) {
     if (rig.busy) return; rig.busy = true; rig.aborted = false; if (btn) btn.disabled = true;
-    try { await fn(); } catch (e) { if (rig.scanning && (rig.bouncing || /reset|Alarm/i.test(e.message))) rig.resume = true; stageMsg(e.message); }
+    try { await fn(); } catch (e) { if (rig.scanning && !rig.aborted && (rig.bouncing || /reset|Alarm/i.test(e.message))) rig.resume = true; stageMsg(e.message); }
     finally { rig.busy = false; rig.scanning = false; if (btn) btn.disabled = false; }
   }
   // Home, done by the page (GRBL's own $H needs a switch on every axis; Z has none yet): each axis jogs slowly towards
@@ -2016,10 +2017,13 @@ document.documentElement.lang = 'en';
     if (await pressed()) throw new Error(`The ${ax} switch did not release.`);
     await off(2);
   }
-  $('stageHomeBtn').onclick = e => stageRun(e.target, async () => {
+  // Home while a scan (or anything else) is running does nothing but say so: Stop first. Stop then Home finds the
+  // switches and parks at the start spot; it never restarts the scan by itself (only a switch flicker or a reset of the
+  // Arduino during a scan does that, see bounceOff and stageRun).
+  $('stageHomeBtn').onclick = e => rig.busy ? stageMsg(rig.scanning ? 'A scan is running: press Stop first, then Home.' : 'The stage is busy: press Stop first, then Home.') : stageRun(e.target, async () => {
     try { await homeAll(); } catch (err) { try { localStorage.removeItem('eggLastPos'); } catch {} throw err; } finally { rig.homing = false; }   // a failed Home leaves the place unknown
     // a scan cut short by a flicker on a switch wire carries on by itself (its missing shots), at most 3 times a scan
-    if (rig.resume) { rig.resume = false; if ((rig.resumes = (rig.resumes || 0) + 1) <= 3) { stageMsg('Carrying on with the scan where it stopped…'); setTimeout(() => $('stageScanBtn').click(), 800); } }
+    if (rig.resume) { rig.resume = false; if ((rig.resumes = (rig.resumes || 0) + 1) <= 3) { stageMsg('Carrying on with the scan where it stopped…'); setTimeout(() => { rig.resuming = true; $('stageScanBtn').click(); }, 800); } }
   });
   // The fixed spot (set once by hand, 23 Nov): where Home parks and every side's scan starts, with Y kept there (no
   // centring) and Z's sweep centred on its focus height. Without it: the old park place, centring and end-finding.
@@ -2070,7 +2074,7 @@ document.documentElement.lang = 'en';
   $('stageZLo').onchange = $('stageZHi').onchange = () => { const a = parseFloat($('stageZLo').value), b = parseFloat($('stageZHi').value); if (a < b) { stageLim.zlo = a; stageLim.zhi = b; } limSave(); };
   $('stageMaxYBtn').onclick = () => { if (!rig.homed) { stageMsg('Press Home first.'); return; } stageLim.y = +rig.pos[1].toFixed(1); limSave(); stageMsg(`Y limit set to ${stageLim.y} mm.`); };
   $('stageUnlockBtn').onclick = () => stageSend('$X').then(() => stageMsg('Unlocked (not homed: positions start from here).')).catch(e => stageMsg(e.message));
-  $('stageStopBtn').onclick = async () => { if (rig.homed) { try { localStorage.setItem('eggLastPos', JSON.stringify(rig.pos)); } catch {} } rig.aborted = true; rig.scanStop = true; rig.stopping = true; await stageRaw('\x85'); await stageRaw('!'); await sleepMs(200); await stageRaw('\x18'); await sleepMs(1500); rig.stopping = false; rig.homed = false; stageMsg('Stopped. Press Home before scanning again.'); rig.busy = false; };
+  $('stageStopBtn').onclick = async () => { if (rig.homed) { try { localStorage.setItem('eggLastPos', JSON.stringify(rig.pos)); } catch {} } rig.aborted = true; rig.scanStop = true; rig.stopping = true; rig.resume = false; rig.resuming = false; await stageRaw('\x85'); await stageRaw('!'); await sleepMs(200); await stageRaw('\x18'); await sleepMs(1500); rig.stopping = false; rig.homed = false; stageMsg('Stopped. Press Home before scanning again.'); rig.busy = false; };
   // Jog (as in MicroScanner's jog buttons): a click moves one step; holding for 600 ms starts a continuous jog that
   // stops the moment the button is released (GRBL jog-cancel, 0x85). Arrow keys jog X/Y, Page Up/Down jog Z.
   // Every jog is cut short at the axis limit (after Home). rig.goal follows jogs still on their way.
@@ -2191,19 +2195,16 @@ document.documentElement.lang = 'en';
   // RIG.sweep.gap mm on the way. Each frame's height comes from the stage's reported positions around the moment it was
   // taken. Every part of the pod (grid cell) has a sharpest frame; only those frames and their neighbours are merged.
   // The check: parts whose sharpest frame is the first or last of the band are reported (they may lie outside it).
-  async function zSweepStack(up = true) {
-    if (!stream || !video.videoWidth) throw new Error('Start the camera first.');
-    const L = limitOf(2); if (!L) throw new Error('Press Home first.');
-    // the band: 8 mm below to 10.2 mm above the pod's focus height (the start spot's Z when set; -22.4 to -4.2 by default)
-    const S = RIG.sweep, fz = focusZ(), lo = Math.max(L[0], fz - 8), hi = Math.min(L[1], fz + 10.2), from = up ? lo : hi, to = up ? hi : lo;
-    const t0 = performance.now();
+  // One continuous pass of Z from `from` to `to` at `feed` mm/min, keeping a frame every S.gap mm with its height
+  // (from the status reports' track). Returns the frames and how long the pass took.
+  async function sweepPass(from, to, feed, cells) {
+    const S = RIG.sweep;
     await stageMoveTo({ z: from });
-    await nextFrame(); const cells = stackCells(video, video.videoWidth, video.videoHeight);
-    const dt = 1000 * S.gap / (S.feed / 60), frames = [];
+    const dt = 1000 * S.gap / (feed / 60), frames = [], t0 = performance.now();
     rig.track = [[performance.now(), rig.pos[2]]];
     let done = false, working = false, last = -1e9;
     $('captureBtn').textContent = `Sweeping Z ${from.toFixed(1)} → ${to.toFixed(1)}…`;
-    const move = (async () => { try { await stageSend(`G90 G1 Z${(clampAx(2, to) + rig.zero[2]).toFixed(3)} F${S.feed}`); await stageIdle(); } finally { done = true; } })();
+    const move = (async () => { try { await stageSend(`G90 G1 Z${(clampAx(2, to) + rig.zero[2]).toFixed(3)} F${feed.toFixed(0)}`); await stageIdle(); } finally { done = true; } })();
     const grabbing = new Promise(res => {
       const cb = (now, meta) => {
         if (done) { res(); return; }
@@ -2222,36 +2223,86 @@ document.documentElement.lang = 'en';
       };
       video.requestVideoFrameCallback(cb);
     });
-    await move; await grabbing; while (working) await sleepMs(20);
+    // a hidden page gets no video frames: do not wait for them forever
+    await move; await Promise.race([grabbing, sleepMs(1500)]); while (working) await sleepMs(20);
     const tr = rig.track; rig.track = null; tr.push([performance.now(), rig.pos[2]]);
     const zAt = t => { let i = tr.findIndex(p => p[0] >= t); if (i < 0) return tr[tr.length - 1][1]; if (i === 0) return tr[0][1];
       const [ta, za] = tr[i - 1], [tb, zb] = tr[i]; return tb > ta ? za + (zb - za) * (t - ta) / (tb - ta) : zb; };
     frames.forEach(f => { f.focus = zAt(f.t); });
-    frames.sort((a, b) => a.focus - b.focus);
-    if (frames.length < 3) throw new Error('The camera gave too few frames during the sweep.');
-    // keep each part's sharpest frame and its neighbours
-    const keep = new Set(), n = frames.length; let edgeLo = 0, edgeHi = 0, used = 0;
-    // a part counts for choosing frames when it gets at all sharper (1.25x): the pod's sloping edges are plain and only
-    // a little sharper at their height, and the stricter test left them without a frame (blurred edges, 23 Nov)
-    cells.cover.forEach((cv, c) => {
-      if (cv < 0.02) return;
-      const v = frames.map(f => f.sharp[c]), mx = Math.max(...v), mn = Math.min(...v);
-      if (!(mx > 1.25 * mn)) return;
-      const k = v.indexOf(mx); for (let j = -2; j <= 2; j++) keep.add(k + j);
-      if (cv < STACK.cover || !(mx > STACK.usefulNear * mn)) return;
-      used++;
-      if (k === 0) { if (frames[0].focus > S.board + 0.2) edgeLo++; } else if (k === n - 1) edgeHi++;   // below the board's focus nothing is missed
-    });
-    // every height from the lowest to the highest sharp part (a cell's surface slopes: its in-between heights matter too),
-    // all frames near a part's peak, every other one between
-    const ks = [...keep].filter(i => i >= 0 && i < n), k0 = Math.min(...ks), k1 = Math.max(...ks);
+    return { frames, secs: (performance.now() - t0) / 1000 };
+  }
+  // The largest step in height between neighbouring frames, inside lo..hi (mm)
+  const sweepGap = (frames, lo, hi) => { const z = frames.map(f => f.focus).sort((a, b) => a - b); let g = z.length ? Math.max(z[0] - lo, hi - z[z.length - 1]) : Infinity;
+    for (let i = 1; i < z.length; i++) g = Math.max(g, z[i] - z[i - 1]); return g; };
+  // Focus stack in continuous Z sweeps, WITH the check of the old stepped stack (22 Nov: the speed-up had dropped it):
+  //  1. the frames must lie close together in height: when the camera (or a busy computer, or the page being hidden)
+  //     gave too few, the sweep is done again slower, matched to the frames the camera really gives;
+  //  2. every part of the pod must be sharpest INSIDE the band: a part sharpest at the band's top or bottom frame has its
+  //     sharp height beyond the band, so the band is topped up on that side (3 mm at a time, twice at most, inside the
+  //     Z limits) before the shot is merged and the stage moves on.
+  async function zSweepStack(up = true) {
+    if (!stream || !video.videoWidth) throw new Error('Start the camera first.');
+    const L = limitOf(2); if (!L) throw new Error('Press Home first.');
+    const S = RIG.sweep, fz = focusZ(), t0 = performance.now();
+    let lo = Math.max(L[0], fz - 8), hi = Math.min(L[1], fz + 10.2);
+    if (document.hidden) {   // the camera gives a hidden page no frames: wait until the page is in front again
+      stageMsg('Keep this page in front during the scan: the camera gives a hidden page no pictures. Waiting…');
+      while (document.hidden && !rig.scanStop) await sleepMs(300);
+    }
+    await nextFrame(); const cells = stackCells(video, video.videoWidth, video.videoHeight);
+    let feed = rig.sweepFeed || S.feed, frames, slowed = false;
+    for (let tries = 0; ; tries++) {
+      const p = await sweepPass(up ? lo : hi, up ? hi : lo, feed, cells); frames = p.frames;
+      const gap = sweepGap(frames, lo, hi), want = (hi - lo) / S.gap;
+      if ((gap <= 2.5 * S.gap && frames.length >= 0.6 * want) || tries >= 2 || rig.scanStop) break;
+      // too few frames: slow down to what the camera gives (80 % of it), and keep that speed for the next shots
+      const fps = frames.length / Math.max(1, p.secs), f2 = Math.max(15, Math.min(0.9 * feed, 0.8 * fps * S.gap * 60));
+      stageMsg(`Only ${frames.length} pictures came in that sweep (${fps.toFixed(1)} a second, gaps up to ${gap.toFixed(2)} mm): sweeping again slower (${f2.toFixed(0)} mm/min)…`);
+      feed = rig.sweepFeed = f2; slowed = true;
+      if (document.hidden) while (document.hidden && !rig.scanStop) await sleepMs(300);
+    }
+    if (frames.length < 3) throw new Error('The camera gave too few pictures during the sweep (is the page in front? is the camera busy?).');
+    // which frames hold each part's sharpest height; parts sharpest at the band's ends
+    const peaks = () => {
+      frames.sort((a, b) => a.focus - b.focus);
+      const keep = new Set(), n = frames.length; let edgeLo = 0, edgeHi = 0, used = 0;
+      // a part counts for choosing frames when it gets at all sharper (1.25x): the pod's sloping edges are plain and only
+      // a little sharper at their height, and the stricter test left them without a frame (blurred edges, 23 Nov)
+      cells.cover.forEach((cv, c) => {
+        if (cv < 0.02) return;
+        const v = frames.map(f => f.sharp[c]), mx = Math.max(...v), mn = Math.min(...v);
+        if (!(mx > 1.25 * mn)) return;
+        const k = v.indexOf(mx); for (let j = -2; j <= 2; j++) keep.add(k + j);
+        if (cv < STACK.cover || !(mx > STACK.usefulNear * mn)) return;
+        used++;
+        if (frames[k].focus < lo + 0.4) { if (frames[k].focus > S.board + 0.2) edgeLo++; }   // below the board's focus nothing is missed
+        else if (frames[k].focus > hi - 0.4) edgeHi++;
+      });
+      return { keep, edgeLo, edgeHi, used, need: Math.max(2, 0.03 * used) };
+    };
+    let pk = peaks(), topped = [];
+    for (let round = 0; round < 2 && !rig.scanStop; round++) {
+      const goUp = pk.edgeHi > pk.need && hi < L[1] - 0.1, goDown = pk.edgeLo > pk.need && lo > L[0] + 0.1;
+      if (!goUp && !goDown) break;
+      if (goUp) {   // the top of the band: 3 mm more upwards
+        const h2 = Math.min(L[1], hi + 3); stageMsg(`Some parts are sharpest at the top of the band: adding Z ${hi.toFixed(1)} to ${h2.toFixed(1)}…`);
+        const p = await sweepPass(hi - 0.5, h2, feed, cells); frames.push(...p.frames); hi = h2; topped.push('up');
+      }
+      if (goDown) { // the bottom: 3 mm more downwards (swept upwards, like the rest)
+        const l2 = Math.max(L[0], lo - 3); stageMsg(`Some parts are sharpest at the bottom of the band: adding Z ${l2.toFixed(1)} to ${lo.toFixed(1)}…`);
+        const p = await sweepPass(l2, lo + 0.5, feed, cells); frames.push(...p.frames); lo = l2; topped.push('down');
+      }
+      pk = peaks();
+    }
+    const n = frames.length;
     // the whole band every other frame (about 0.5 mm): a selection by the grid cells left the pod's sloping sides
     // without their sharp height (egg 2, 23 Nov); plus every frame near a part's peak
-    let pick = frames.filter((f, i) => keep.has(i) || i % 2 === 0);
-    if (pick.length < 3) pick = frames.filter((f, i) => i % 2 === 0);
+    let pick = frames.filter((f, i) => pk.keep.has(i) || i % 2 === 0);
+    if (pick.length < 3) pick = frames.slice();
     const sweptS = (performance.now() - t0) / 1000;
     const view = frames.reduce((a, f) => Math.abs(f.focus - fz) < Math.abs(a.focus - fz) ? f : a).small;   // the pod near its usual focus, for the tail check
-    return { pick, all: n, used, edgeLo, edgeHi, zmin: frames[0].focus, zmax: frames[n - 1].focus, sweptS, view };
+    return { pick, all: n, used: pk.used, edgeLo: pk.edgeLo, edgeHi: pk.edgeHi, zmin: frames[0].focus, zmax: frames[n - 1].focus, sweptS, view,
+      gap: sweepGap(frames, lo, hi), slowed, topped };
   }
   async function mergeSweep(sw) {
     const t0 = performance.now();
@@ -2259,7 +2310,8 @@ document.documentElement.lang = 'en';
     const r = await stackCall({ type: 'stackEnd', ref: sw.pick.length >> 1 });
     const need = Math.max(2, 0.03 * sw.used), soft = sw.edgeLo > need ? 'lowest' : sw.edgeHi > need ? 'highest' : '';
     $('stageStackNote').textContent = `Swept Z ${sw.zmin.toFixed(1)} to ${sw.zmax.toFixed(1)} in ${sw.sweptS.toFixed(0)} s (${sw.all} frames), merged the ${sw.pick.length} that hold a sharp part in ${((performance.now() - t0) / 1000).toFixed(0)} s. ${Math.round(r.detail * 100)}% of the picture has detail. ` +
-      (soft ? `Some parts are sharpest at the ${soft} height of the band: they may stay soft.` : 'Check passed: every part of the pod peaks inside the band.');
+      (sw.topped && sw.topped.length ? `Band topped up ${sw.topped.join(' and ')} so every part peaks inside it. ` : '') + (sw.slowed ? `Swept slower (${(rig.sweepFeed || 0).toFixed(0)} mm/min) to get enough pictures. ` : '') +
+      (soft ? `Some parts are sharpest at the ${soft} end of Z's reach: they may stay soft.` : 'Check passed: every part of the pod peaks inside the band.');
     const c = document.createElement('canvas'); c.width = r.width; c.height = r.height;
     c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(r.rgba), r.width, r.height), 0, 0);
     return c;
@@ -2433,51 +2485,89 @@ document.documentElement.lang = 'en';
   // band through the middle. Both edges in view: move so their midpoint is in the middle. One edge cut off by the
   // frame: step a third of the picture towards that side, then look again. Pod wider than the picture: leave it.
   // Returns false when no pod is in view.
+  // Where the pod lies across its width in a picture (the video, or a kept frame): positions along Y's direction in
+  // 160-px units, over the WHOLE picture (a slanting pod pokes out at one end of the frame while its middle looks
+  // centred: egg 2 and egg 4 lost their top that way, 23 Nov) and over a band through the middle.
+  function podSpan(src) {
+    const v = src || $('video'), W0 = v.videoWidth || v.width, H0 = v.videoHeight || v.height, w = 160, h = Math.round(160 * H0 / W0);
+    const c = podCentre.c2 || (podCentre.c2 = document.createElement('canvas')); c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(v, 0, 0, w, h);
+    const d = ctx.getImageData(0, 0, w, h).data;
+    const ux = stageCal.du * w, uy = stageCal.dv * h, ppm = Math.hypot(ux, uy), dx = ux / ppm, dy = uy / ppm;   // Y's direction, 160-px units per mm
+    const band = 0.15 * Math.min(w, h), R = Math.ceil(Math.hypot(w, h) / 2) + 1, all = new Uint16Array(2 * R + 1);
+    let fmin = Infinity, fmax = -Infinity, bmin = Infinity, bmax = -Infinity, nb = 0, n = 0;
+    for (let y = 0, j = 0; y < h; y++) for (let x = 0; x < w; x++, j += 4) {
+      const px = x - w / 2 + 0.5, py = y - h / 2 + 0.5, t = dx * px + dy * py;
+      if (t < fmin) fmin = t; if (t > fmax) fmax = t;
+      if (!isPod(d[j], d[j + 1], d[j + 2])) continue;
+      n++; all[Math.round(t) + R]++;
+      if (Math.abs(-dy * px + dx * py) <= band) { nb++; if (t < bmin) bmin = t; if (t > bmax) bmax = t; }
+    }
+    // whole picture: the first and last rows (across Y) with a few pod pixels, so specks do not count
+    let lo = 0, hi = all.length - 1; while (lo < all.length && all[lo] < 3) lo++; while (hi >= 0 && all[hi] < 3) hi--;
+    const span = fmax - fmin, edge = 0.04 * span;
+    const whole = lo <= hi ? { tmin: lo - R, tmax: hi - R } : null;
+    const cut = s => s && { ...s, low: s.tmin < fmin + edge, high: s.tmax > fmax - edge };
+    return { n, nb, frac: n / (w * h), whole: cut(whole), band: nb >= 20 ? cut({ tmin: bmin, tmax: bmax }) : null, fmin, fmax, span, ppm };
+  }
+  // Centre the pod across its width. Both edges in the picture (taking the whole picture): put their midpoint in the
+  // middle. One edge cut off: slide the visible edge out to 8 % from its side, then look again. Wider than the picture
+  // even so: centre the band through the middle instead (both ends lose a little, evenly). Returns false when no pod
+  // is in view, 'tail' when only a bit of pod shows at the side.
   async function stageCentrePod() {
     let oneEdge = null;
-    for (let i = 0; i < 4; i++) {
-      const v = $('video'), w = 160, h = Math.round(160 * v.videoHeight / v.videoWidth);
-      const c = podCentre.c2 || (podCentre.c2 = document.createElement('canvas')); c.width = w; c.height = h;
-      const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(v, 0, 0, w, h);
-      const d = ctx.getImageData(0, 0, w, h).data;
-      const ux = stageCal.du * w, uy = stageCal.dv * h, ppm = Math.hypot(ux, uy), dx = ux / ppm, dy = uy / ppm;   // Y's direction, 160-px units per mm
-      const band = 0.15 * Math.min(w, h);
-      let tmin = Infinity, tmax = -Infinity, fmin = Infinity, fmax = -Infinity, n = 0;
-      for (let y = 0, j = 0; y < h; y++) for (let x = 0; x < w; x++, j += 4) {
-        const px = x - w / 2, py = y - h / 2;
-        if (Math.abs(-dy * px + dx * py) > band) continue;            // outside the band through the middle
-        const t = dx * px + dy * py; if (t < fmin) fmin = t; if (t > fmax) fmax = t;
-        if (isPod(d[j], d[j + 1], d[j + 2])) { n++; if (t < tmin) tmin = t; if (t > tmax) tmax = t; }
-      }
-      if (n < 20) {                                                       // no pod across the middle of the picture
-        let gAll = 0; for (let j = 0; j < d.length; j += 4) if (isPod(d[j], d[j + 1], d[j + 2])) gAll++;
-        return gAll > 0.01 * w * h ? 'tail' : false;                       // some pod at the side: its tail is in this picture
-      }
-      // An edge counts as seen when board shows beyond it (the green stops well inside the frame).
-      const edge = 0.04 * (fmax - fmin), lowCut = tmin < fmin + edge, highCut = tmax > fmax - edge, span = fmax - fmin;
-      let move;                                                           // how far to shift the pod along +t, 160-px units
-      if (lowCut && highCut) return true;                                 // the pod fills the frame across: nothing to do
-      if (!lowCut && !highCut) move = -(tmin + tmax) / 2;                 // both edges in view: put their midpoint in the middle
+    for (let i = 0; i < 5; i++) {
+      const P = podSpan(), { fmin, fmax, span, ppm } = P;
+      if (!P.band) return P.frac > 0.01 ? 'tail' : false;                // no pod across the middle of the picture
+      let s = P.whole, move;
+      if (s.low && s.high) s = P.band;                                    // wider than the picture end to end: go by the middle
+      if (s.low && s.high) return true;                                   // fills the frame across: nothing to do
+      if (!s.low && !s.high) move = -(s.tmin + s.tmax) / 2;               // both edges in view: their midpoint to the middle
       else {
-        // One edge in view, the other cut off: the pod is wider than what shows. Slide the visible edge out to 8 % from
-        // its own side of the frame, which brings in as much pod as fits. If the far edge then appears, the next
-        // pass centres on both; if the same edge is still the only one, the pod is wider than the frame: stop there.
-        if (oneEdge === (lowCut ? 'high' : 'low')) return true;
-        oneEdge = lowCut ? 'high' : 'low';
-        move = lowCut ? (fmax - 0.08 * span) - tmax : (fmin + 0.08 * span) - tmin;
+        if (oneEdge === (s.low ? 'high' : 'low')) return true;
+        oneEdge = s.low ? 'high' : 'low';
+        move = s.low ? (fmax - 0.08 * span) - s.tmax : (fmin + 0.08 * span) - s.tmin;
       }
       const dyMm = Math.max(-10, Math.min(10, move / ppm));
       if (Math.abs(dyMm) < 0.3) return true;
       let yT = rig.homed ? clampAx(1, rig.pos[1] + dyMm) : Math.min(rig.pos[1] + dyMm, rig.yBackMax ?? Infinity);
-      if (rig.yBand) yT = Math.max(rig.yBand[0], Math.min(rig.yBand[1], yT));   // during a scan: near the Y the side started at
+      if (rig.yBand) yT = Math.max(rig.yBand[0], Math.min(rig.yBand[1], yT));
       if (Math.abs(yT - rig.pos[1] - dyMm) > 0.5) {                     // Y cannot go as far as the pod needs
-        const L = limitOf(1), front = L && yT <= L[0] + 0.1;
-        rig.yWarn = `The pod lies too far ${front ? 'forward' : 'back'} for Y to centre it: move the pod about ${Math.ceil(Math.abs(rig.pos[1] + dyMm - yT) / 5) * 5 + 5} mm ${front ? 'back (towards the column)' : 'forward'} and scan this side again.`;
+        const L = limitOf(1), front = L && yT <= L[0] + 0.1, need = Math.abs(rig.pos[1] + dyMm - yT);
+        rig.yShort = { front, mm: need };
+        rig.yWarn = `The pod lies too far ${front ? 'forward' : 'back'} for Y to reach it: move the pod about ${Math.ceil(need / 5) * 5 + 5} mm ${front ? 'back (towards the column)' : 'forward'} and scan this side again.`;
       }
       if (Math.abs(yT - rig.pos[1]) < 0.1) return true;                  // already at a limit
-      await stageMoveTo({ y: yT }); await sleepMs(300); await nextFrame();
+      await stageMoveTo({ y: yT }); await sleepMs(300); await nextFrame(); await nextFrame();
     }
     return true;
+  }
+  // Is the whole pod (across its width) in this picture? false only when one edge is cut off while the other side
+  // still has room, i.e. Y should have moved (a pod wider than the picture cannot do better and counts as fine).
+  function podFits(src) {
+    const P = podSpan(src), s = P.whole; if (!s || !P.band) return true;
+    if (s.low && s.high) return true;
+    const room = s.low ? (P.fmax - s.tmax) : (s.tmin - P.fmin);
+    return !((s.low || s.high) && room > 0.08 * P.span);
+  }
+  // Before a new side is shot: run along the pod quickly (no focus sweep), centring Y at each shot's X, to find out
+  // whether Y can keep the whole pod in the picture all the way. If it cannot, nothing is shot: the pod has to be
+  // moved first (a scan with the pod cut off cannot be stitched).
+  async function podFitPass(x0, dx) {
+    const L = limitOf(0) || [0, stageLim.x], ys = [], wide = []; let short = null;
+    for (let k = 0; k < MARKS && !rig.scanStop; k++) {
+      const xT = x0 + k * dx; if (xT < L[0] - 0.01 || xT > L[1] + 0.01) break;
+      stageMsg(`Checking the pod fits: X ${xT.toFixed(0)} mm…`);
+      await stageMoveTo({ x: xT, z: focusZ() }); await sleepMs(200); await nextFrame(); await nextFrame();
+      rig.yShort = null;
+      const seen = await stageCentrePod(); await nextFrame();
+      if (!seen) break;
+      ys.push(rig.pos[1]);
+      if (rig.yShort && (!short || rig.yShort.mm > short.mm)) short = { ...rig.yShort, shot: k + 1 };
+      const P = podSpan(); if (P.whole && P.whole.low && P.whole.high) wide.push(k + 1);
+      if (seen === 'tail' || !podRunsOn()) break;
+    }
+    return { ys, short, wide };
   }
   // Is the pod still running out of the picture on the side the view is travelling to? (false: it ends in this picture)
   function podInView() {   // some pod in the picture (more than 1 %)
@@ -2540,7 +2630,8 @@ document.documentElement.lang = 'en';
     // (its old shots removed) or carry on with them (23 Nov: it carried on at A3 from the old start and looked random).
     {
       const n0 = nextShot(podId), sd = (n0 || 'B')[0], old = photos.filter(p => !p.example && p.pod === podId && (p.shot || '')[0] === sd);
-      if (old.length && n0 && parseInt(n0.slice(1), 10) > 1) {
+      const resuming = rig.resuming; rig.resuming = false;   // carrying on by itself after a flicker: no box, go on
+      if (!resuming && old.length && n0 && parseInt(n0.slice(1), 10) > 1) {
         if (confirm(`${podId} side ${sd} already has ${old.length} shot${old.length > 1 ? 's' : ''}.\n\nOK: start side ${sd} again from where the stage is now (those shots are removed).\nCancel: carry on after them, from where that try started.`)) {
           old.forEach(removePhoto); render();
         }
@@ -2554,7 +2645,7 @@ document.documentElement.lang = 'en';
     const sideKey0 = podId + '|' + (first0 || 'A')[0];
     if (newSide) { focus[sideKey0] = { z: +rig.pos[2].toFixed(3), y: +rig.pos[1].toFixed(2) }; try { localStorage.setItem('eggSideFocus', JSON.stringify(focus)); } catch {} }
     rig.scanFocus = focus[sideKey0] ? focus[sideKey0].z : null;
-    { const yb = focus[sideKey0] ? focus[sideKey0].y : rig.pos[1]; rig.yBand = [yb - 8, yb + 8]; }
+    { const yb = focus[sideKey0] ? focus[sideKey0].y : rig.pos[1]; rig.yBand = [yb - 15, yb + 15]; }
     if (!newSide && focus[sideKey0]) await stageMoveTo({ y: focus[sideKey0].y });
     { // a pod must be in view at the start (else the calibration has only the plain board to measure)
       const v = $('video'), w = 160, h = Math.round(160 * v.videoHeight / v.videoWidth), c = document.createElement('canvas'); c.width = w; c.height = h;
@@ -2575,8 +2666,21 @@ document.documentElement.lang = 'en';
     if (k0 === 0) { starts[sideKey] = x0; try { localStorage.setItem('eggSideStart', JSON.stringify(starts)); } catch {} }
     $('stageStartX').value = x0;
     if (!Number.isFinite(x0) || !(dx > 0)) throw new Error('Set the scan start and the X step.');
-    rig.yWarn = null; rig.scanning = true; rig.scanStop = false; let n = 0, side = null, up = true, view = null, merging = Promise.resolve(), t0 = performance.now();
+    rig.yWarn = null; rig.cutShots = null; rig.scanning = true; rig.scanStop = false; let n = 0, side = null, up = true, view = null, merging = Promise.resolve(), t0 = performance.now();
     const sweeping = $('stageStack').checked;
+    // A new side: first run along the pod without shooting, to make sure Y can keep the whole pod in the picture all the
+    // way (a pod cut off at its top or bottom cannot be stitched). If it cannot, stop before shooting anything.
+    if (k0 === 0 && centre && $('stageFitCheck').checked) {
+      const yStart = rig.pos[1], f = await podFitPass(x0, dx);
+      await stageMoveTo({ x: x0, y: yStart, z: focusZ() }); await sleepMs(200);
+      if (rig.scanStop) throw new Error('Stopped.');
+      if (f.short) {
+        rig.yWarn = null; rig.yBand = null; rig.scanning = false;
+        throw new Error(`Not started: at shot ${f.short.shot} Y cannot reach far enough to keep the whole pod in the picture. Move the pod about ${Math.ceil(f.short.mm / 5) * 5 + 5} mm ${f.short.front ? 'back (towards the column)' : 'forward'}, or lay it straighter along the rails, then fine-tune and press Scan this side again.`);
+      }
+      if (f.ys.length) stageMsg(`The pod fits: Y goes ${Math.min(...f.ys).toFixed(1)}–${Math.max(...f.ys).toFixed(1)} mm over ${f.ys.length} shots.${f.wide.length ? ` At shot${f.wide.length > 1 ? 's' : ''} ${f.wide.join(', ')} the pod is wider than the picture (a little is lost at both edges).` : ''} Shooting…`);
+      rig.yWarn = null;
+    }
     while (!rig.scanStop) {
       const shot = nextShot(podId); if (!shot) break;
       const k = parseInt(shot.slice(1), 10) - 1;
@@ -2593,7 +2697,16 @@ document.documentElement.lang = 'en';
       if (!seen) { if (n) { stageMsg('The pod ends here.'); break; } throw new Error('No pod in view at the start: move X (and Y) until it is.'); }
       if (sweeping) {   // sweep here, merge while the stage goes on to the next spot
         const tag = stageTag(), key = podId + '|' + shot; reservedShots.add(key);
-        const sw = await zSweepStack(up); view = sw.view;
+        let sw = await zSweepStack(up);
+        // the whole pod must be in the picture: if an edge is cut off while the other side has room, centre again and
+        // take this shot once more
+        if (centre && !podFits(sw.view)) {
+          stageMsg(`Shot ${shot}: the pod ran off the picture's edge, centring again and taking it once more…`);
+          await stageMoveTo({ z: focusZ() }); await sleepMs(200); await nextFrame(); await nextFrame();
+          await stageCentrePod(); sw = await zSweepStack(up);
+          if (!podFits(sw.view)) rig.cutShots = (rig.cutShots || []).concat(shot);
+        }
+        view = sw.view;
         merging = merging.then(() => mergeSweep(sw)).then(c => saveShot(c, shot, tag, true))
           .catch(err => { $('stageStackNote').textContent = `Merging ${shot} failed: ${err.message}`; }).finally(() => reservedShots.delete(key));
       } else {
@@ -2609,7 +2722,8 @@ document.documentElement.lang = 'en';
     if (n && !rig.scanStop) await stageMoveTo(sweeping ? { x: x0, z: focusZ() } : { x: x0 });   // back to the start, ready for the other side
     if (sweeping) { stageMsg('Merging the last shots…'); await merging; }
     const mins = ((performance.now() - t0) / 60000).toFixed(1); rig.resumes = 0; rig.yBand = null;
-    const yWarn = rig.yWarn; rig.yWarn = null;
+    const yWarn = rig.yWarn || (rig.cutShots && rig.cutShots.length ? `The pod is cut off at the edge in shot${rig.cutShots.length > 1 ? 's' : ''} ${rig.cutShots.join(', ')}: move the pod so Y can reach it and scan this side again.` : null);
+    rig.yWarn = null; rig.cutShots = null;
     stageMsg(n ? `Scanned ${n} shot${n > 1 ? 's' : ''} in ${mins} min${/ends here|outside the limit/.test(end) ? ' (' + end + ')' : ''}. ${side === 'B' ? 'Both sides done: press Next pod (it saves this pod first).' : 'Flip the pod and press Side B next, then Scan again.'}` : 'Nothing to scan: this side is complete.');
     if (yWarn) stageMsg($('stageNote').textContent + ' ⚠ ' + yWarn);
   });

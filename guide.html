@@ -45,10 +45,10 @@
     <li>Type the pod's name in <b>Pod ID</b> (for example <i>Pod 12</i>).</li>
     <li>Lay the pod along the rails, its right end under the lens (the stage is parked at the start spot).</li>
     <li><b>Fine-tune</b> with the keyboard: arrow keys move X and Y, Page Up / Page Down move Z (the jog step is set under <i>Adjust by hand</i>). Stop when the pod's <b>right end is in the picture</b>, the pod runs <b>across the middle</b>, and its surface is <b>sharp</b>.</li>
-    <li>Press <b class="btn">Scan this side</b>. It starts exactly where you left the stage: X steps about 26 mm per shot, Y follows the pod (at most 8 mm from where you set it), Z sweeps from 8 mm below to 10 mm above the focus you set, and it stops by itself at the pod's tail. The stitched pod grows underneath the live picture.</li>
+    <li>Press <b class="btn">Scan this side</b>. First it runs along the pod once without shooting (about 30 s) to check that Y can keep the <b>whole pod</b> in the picture all the way; if it cannot, it shoots nothing and says which way to move the pod. Then it shoots from exactly where you left the stage: X steps about 26 mm per shot, Y follows the pod (a shot whose pod runs off the top or bottom is taken again), Z sweeps from 8 mm below to 10 mm above the focus you set, and it stops by itself at the pod's tail. The stitched pod grows underneath the live picture.</li>
     <li>If a box asks whether to start this side again: <b>OK</b> starts it again from where the stage is (the side's old shots are removed); <b>Cancel</b> carries on after them.</li>
     <li>When it says <i>Flip the pod</i>: turn the pod over, fine-tune again (right end in the picture, across the middle, sharp), press <b class="btn">Side B next</b>, then <b class="btn">Scan this side</b>.</li>
-    <li>If it says the pod lies <i>too far forward</i> (or back), move the pod the way it says and scan that side again.</li>
+    <li>If it says <i>Not started</i> or that the pod lies <i>too far forward</i> (or back): move the pod the way it says (or lay it straighter along the rails), fine-tune again and press <b class="btn">Scan this side</b>. The whole pod must be in every picture, or the stitching cannot join it.</li>
     <li>Press <b class="btn">Next pod</b>. This <b>saves the pod first</b> (one .zip in your Downloads folder), then moves on to the next pod's name.</li>
   </ol>
   <p>To change where Home parks (for example after the microscope was moved), fine-tune to the new place and press <b>Remember this spot</b> under <i>Adjust by hand</i>.</p>
@@ -70,6 +70,8 @@
     <tr><td>The live picture is black or frozen</td><td>Press <b class="btn">Use camera</b> again. If the wrong camera shows, choose <i>Digital Microscope</i> under <i>Adjust by hand</i>.</td></tr>
     <tr><td>“Not connected” / Connect does nothing / “The device has been lost”</td><td>Check the USB cable at both ends and the power supply, reload the page, press <b class="btn">Connect stage</b> again. Close any other tab that has the page open (only one page can hold the rig). If the USB keeps dropping when the motors start, use a short USB cable or a powered USB hub.</td></tr>
     <tr><td>“… went its whole travel without its switch answering”</td><td>Stop. Do not press Home again until that switch is checked: press it by hand and see <b>switch X/Y/Z</b> on the status line.</td></tr>
+    <tr><td>“Some parts are sharpest at the top/bottom of the band: adding…” or “sweeping again slower…”</td><td>Nothing to do: the shot is being checked and topped up until every part of the pod is sharp. Keep the scanner page in front during a scan (a hidden page gets no pictures from the camera).</td></tr>
+    <tr><td>Pressing Home during a scan</td><td>It does nothing while a scan runs. Press <b class="btn">Stop</b> first, then <b>Home</b>: it finds the switches and parks at the start spot. It does not restart the scan; press <b class="btn">Scan this side</b> to go on from the next shot.</td></tr>
     <tr><td>The scan stopped early, before the tail</td><td>Press <b class="btn">Scan this side</b> again: it continues from the next shot.</td></tr>
     <tr><td>The pictures are blurred everywhere</td><td>The microscope's height may have changed (rig moved or knocked). Tell Jamie: the focus band needs measuring again.</td></tr>
   </table>
@@ -78,7 +80,7 @@
   <div class="warn">
     <ul>
       <li>Don't turn the microscope's own focus or zoom ring. It is set and taped.</li>
-      <li>Don't push the slides by hand while the 12 V is on, and don't put anything behind the tray (the column is at the back).</li>
+      <li>Don't push the slides by hand while the power is on, and don't put anything behind the tray (the column is at the back).</li>
       <li>Don't change anything under <i>Rig settings</i>.</li>
       <li>Don't open the page in two tabs at once.</li>
     </ul>
@@ -88,7 +90,7 @@
   <ol>
     <li>Make sure the last pod is saved (press <b class="btn">Save this pod's photos</b> if the line says it is not).</li>
     <li>Copy the .zip files to the shared drive.</li>
-    <li>Switch off the 12 V, then unplug the USB.</li>
+    <li>Switch off the 24 V supply, then unplug the USB.</li>
   </ol>
 </main>
 </body>
